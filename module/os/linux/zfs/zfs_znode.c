@@ -49,6 +49,7 @@
 #include <sys/dnode.h>
 #include <sys/fs/zfs.h>
 #include <sys/zpl.h>
+#include <linux/mm_compat.h>
 #endif /* _KERNEL */
 
 #include <sys/dmu.h>
