@@ -43,8 +43,14 @@ config ZFS
 	  If unsure, say N.
 EOF
 
-sed -i '/source "fs\/ext2\/Kconfig\"/i\source "fs/zfs/Kconfig"' "$KERNEL_DIR/fs/Kconfig"
-echo 'obj-$(CONFIG_ZFS) += zfs/' >> "$KERNEL_DIR/fs/Makefile"
+if ! grep -qF 'source "fs/zfs/Kconfig"' "$KERNEL_DIR/fs/Kconfig"; then
+	sed -E '\|source "fs/ext2/Kconfig"|i\source "fs/zfs/Kconfig"' \
+	    -i "$KERNEL_DIR/fs/Kconfig"
+fi
+if ! grep -qF 'obj-$(CONFIG_ZFS)' "$KERNEL_DIR/fs/Makefile"; then
+	sed -E '\|Do not add any filesystems before this line|a\obj-$(CONFIG_ZFS) \t\t+= zfs/' \
+	    -i "$KERNEL_DIR/fs/Makefile"
+fi
 
 echo "$0: done. now you can build the kernel with ZFS support." >&2
 echo "$0: make sure you enable ZFS support (CONFIG_ZFS) before building." >&2
