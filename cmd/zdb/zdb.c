@@ -9228,6 +9228,8 @@ main(int argc, char **argv)
 
 	dprintf_setup(&argc, argv);
 
+	fprintf(stderr, "zdb: %s\n", zfs_version_git());
+
 	/*
 	 * Set up signal handlers, so if we crash due to bad on-disk data we
 	 * can get more info. Unlike ztest, we don't bail out if we can't set

@@ -28,6 +28,17 @@
 #include <stdio.h>
 #include <libzutil.h>
 #include <string.h>
+#include <zfs_gitrev.h>
+
+/*
+ * Return the version string
+ * (avoids including zfs_gitrev.h into every file and busting caches)
+ */
+const char *
+zfs_version_git(void)
+{
+	return (ZFS_META_GITREV);
+}
 
 /*
  * Return B_TRUE if "str" is a number string, B_FALSE otherwise.
