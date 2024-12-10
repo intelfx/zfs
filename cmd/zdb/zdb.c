@@ -6101,11 +6101,13 @@ skipped:
 	}
 
 	if (block_classes != 0) {
-		spa_config_enter(zcb->zcb_spa, SCL_CONFIG, FTAG, RW_READER);
-
 		uint64_t vdev = DVA_GET_VDEV(&bp->blk_dva[0]);
 		uint64_t offset = DVA_GET_OFFSET(&bp->blk_dva[0]);
-		vdev_t *vd = vdev_lookup_top(zcb->zcb_spa, vdev);
+		// XXX: inline vdev_lookup_top(zcb->zcb_spa, vdev) to avoid pointless locking
+		vdev_t *vd = NULL, *rvd = zcb->zcb_spa->spa_root_vdev;
+		if (vdev < rvd->vdev_children) {
+			vd = (rvd->vdev_child[vdev]);
+		}
 		ASSERT(vd != NULL);
 		metaslab_t *ms = vd->vdev_ms[offset >> vd->vdev_ms_shift];
 		ASSERT(ms != NULL);
@@ -6113,8 +6115,6 @@ skipped:
 		ASSERT(mg != NULL);
 		metaslab_class_t *mc = mg->mg_class;
 		ASSERT(mc != NULL);
-
-		spa_config_exit(zcb->zcb_spa, SCL_CONFIG, FTAG);
 
 		int class;
 		if (mc == spa_normal_class(zcb->zcb_spa)) {
