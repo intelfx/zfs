@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: CDDL-1.0
-i_tdir = /usr/share/initramfs-tools
+i_tdir = $(datarootdir)/initramfs-tools
 dist_i_t_SCRIPTS = \
 	%D%/zfsunlock
 
