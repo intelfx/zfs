@@ -1260,6 +1260,25 @@ zfs_valid_proplist(libzfs_handle_t *hdl, zfs_type_t type, nvlist_t *nvl,
 			break;
 		}
 
+		case ZFS_PROP_VOLBLKSECTORSIZE:
+		case ZFS_PROP_VOLBLKSECTORHINT:
+		{
+			char buf[64];
+
+			/* Zero selects the default */
+			if (intval != 0 && (intval < SPA_MINBLOCKSIZE ||
+			    intval > SPA_OLD_MAXBLOCKSIZE || !ISP2(intval))) {
+				zfs_nicebytes(SPA_OLD_MAXBLOCKSIZE, buf,
+				    sizeof (buf));
+				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+				    "'%s' must be zero or power of 2 from 512B "
+				    "to %s"), propname, buf);
+				(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
+				goto error;
+			}
+			break;
+		}
+
 		case ZFS_PROP_SPECIAL_SMALL_BLOCKS:
 		{
 			int maxbs = SPA_MAXBLOCKSIZE;

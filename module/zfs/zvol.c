@@ -117,6 +117,7 @@ typedef enum {
 	ZVOL_ASYNC_RENAME_MINORS,
 	ZVOL_ASYNC_SET_SNAPDEV,
 	ZVOL_ASYNC_SET_VOLMODE,
+	ZVOL_ASYNC_SET_TOPOLOGY,
 	ZVOL_ASYNC_MAX
 } zvol_async_op_t;
 
@@ -130,6 +131,8 @@ typedef struct {
 	int32_t zt_status;
 	int zt_error;
 } zvol_task_t;
+
+static void zvol_task_cb(void *arg);
 
 zv_request_task_t *
 zv_request_task_create(zv_request_t zvr)
@@ -1285,6 +1288,20 @@ zvol_last_close(zvol_state_t *zv)
 
 	spa_t *spa = dmu_objset_spa(zv->zv_objset);
 
+	/*
+	 * Topology changes that could not be applied while the zvol was open
+	 * are retried now that it has been closed.
+	 */
+	if ((zv->zv_flags & (ZVOL_TOPOLOGY_PENDING | ZVOL_REMOVING)) ==
+	    ZVOL_TOPOLOGY_PENDING) {
+		zvol_task_t *task = kmem_zalloc(sizeof (zvol_task_t), KM_SLEEP);
+		task->zt_op = ZVOL_ASYNC_SET_TOPOLOGY;
+		strlcpy(task->zt_name1, zv->zv_name, sizeof (task->zt_name1));
+		(void) taskq_dispatch(spa->spa_zvol_taskq, zvol_task_cb,
+		    task, TQ_SLEEP);
+	}
+	zv->zv_flags &= ~ZVOL_TOPOLOGY_PENDING;
+
 	zvol_shutdown_zv(zv);
 
 	dmu_objset_disown(zv->zv_objset, 1, zv);
@@ -1501,6 +1518,7 @@ zvol_task_report_status(zvol_task_t *task)
 		"rename",
 		"set snapdev",
 		"set volmode",
+		"set topology",
 		"unknown",
 	};
 
@@ -1926,6 +1944,112 @@ zvol_set_volmode_impl(zvol_task_t *task)
 }
 
 /*
+ * Apply the topology properties to the minor of a single zvol or snapshot.
+ */
+static int
+zvol_set_topology_minor(const char *name)
+{
+	uint64_t sectorsize, sectorhint;
+	zvol_state_t *zv;
+	int error;
+
+	error = dsl_prop_get_integer(name,
+	    zfs_prop_to_name(ZFS_PROP_VOLBLKSECTORSIZE), &sectorsize, NULL);
+	if (error == 0)
+		error = dsl_prop_get_integer(name,
+		    zfs_prop_to_name(ZFS_PROP_VOLBLKSECTORHINT), &sectorhint,
+		    NULL);
+	if (error != 0)
+		return (error);
+
+	zv = zvol_find_by_name(name, RW_NONE);
+	if (zv == NULL)
+		return (0);
+
+	if (zv->zv_flags & ZVOL_REMOVING) {
+		mutex_exit(&zv->zv_state_lock);
+		return (0);
+	}
+
+	error = zvol_os_set_topology(zv, sectorsize, sectorhint);
+	if (error == EBUSY) {
+		/* Retried from zvol_last_close() */
+		zv->zv_flags |= ZVOL_TOPOLOGY_PENDING;
+		error = 0;
+	}
+	mutex_exit(&zv->zv_state_lock);
+
+	if (error == ENOTSUP) {
+		/*
+		 * The platform cannot change the topology of an existing
+		 * minor, so replace it with a new one.  The minor is not
+		 * open at this point; should it be reopened in the meantime,
+		 * the removal waits for it to be closed again.
+		 */
+		error = zvol_remove_minor_impl(name);
+		if (error == 0)
+			error = zvol_os_create_minor(name);
+	}
+
+	return (error);
+}
+
+typedef struct zvol_name_node {
+	list_node_t	znn_link;
+	char		*znn_name;
+} zvol_name_node_t;
+
+/*
+ * Apply the topology properties to the minors of a zvol and its snapshots.
+ */
+static void
+zvol_set_topology_impl(zvol_task_t *task)
+{
+	const char *name = task->zt_name1;
+	size_t namelen = strlen(name);
+	zvol_name_node_t *znn;
+	fstrans_cookie_t cookie;
+	list_t names;
+	int error;
+
+	if (zvol_inhibit_dev)
+		return;
+
+	/*
+	 * Replacing a minor modifies the list of zvols, so collect the names
+	 * first.
+	 */
+	list_create(&names, sizeof (zvol_name_node_t),
+	    offsetof(zvol_name_node_t, znn_link));
+
+	rw_enter(&zvol_state_lock, RW_READER);
+	for (zvol_state_t *zv = list_head(&zvol_state_list); zv != NULL;
+	    zv = list_next(&zvol_state_list, zv)) {
+		mutex_enter(&zv->zv_state_lock);
+		if (strncmp(zv->zv_name, name, namelen) == 0 &&
+		    (zv->zv_name[namelen] == '\0' ||
+		    zv->zv_name[namelen] == '@')) {
+			znn = kmem_alloc(sizeof (zvol_name_node_t), KM_SLEEP);
+			znn->znn_name = kmem_strdup(zv->zv_name);
+			list_insert_tail(&names, znn);
+		}
+		mutex_exit(&zv->zv_state_lock);
+	}
+	rw_exit(&zvol_state_lock);
+
+	cookie = spl_fstrans_mark();
+	while ((znn = list_remove_head(&names)) != NULL) {
+		error = zvol_set_topology_minor(znn->znn_name);
+		zvol_task_update_status(task, 1, error == 0, error);
+		kmem_strfree(znn->znn_name);
+		kmem_free(znn, sizeof (zvol_name_node_t));
+	}
+	spl_fstrans_unmark(cookie);
+
+	list_destroy(&names);
+}
+
+/*
  * The worker thread function performed asynchronously.
  */
 static void
@@ -1948,6 +2072,9 @@ zvol_task_cb(void *arg)
 		break;
 	case ZVOL_ASYNC_SET_VOLMODE:
 		zvol_set_volmode_impl(task);
+		break;
+	case ZVOL_ASYNC_SET_TOPOLOGY:
+		zvol_set_topology_impl(task);
 		break;
 	default:
 		VERIFY(0);
@@ -2001,11 +2128,21 @@ zvol_set_common_sync_cb(dsl_pool_t *dp, dsl_dataset_t *ds, void *arg)
 		return (0);
 
 	task = kmem_zalloc(sizeof (zvol_task_t), KM_SLEEP);
-	if (zsda->zsda_prop == ZFS_PROP_VOLMODE) {
+	switch (zsda->zsda_prop) {
+	case ZFS_PROP_VOLMODE:
 		task->zt_op = ZVOL_ASYNC_SET_VOLMODE;
-	} else if (zsda->zsda_prop == ZFS_PROP_SNAPDEV) {
+		break;
+
+	case ZFS_PROP_SNAPDEV:
 		task->zt_op = ZVOL_ASYNC_SET_SNAPDEV;
-	} else {
+		break;
+
+	case ZFS_PROP_VOLBLKSECTORSIZE:
+	case ZFS_PROP_VOLBLKSECTORHINT:
+		task->zt_op = ZVOL_ASYNC_SET_TOPOLOGY;
+		break;
+
+	default:
 		kmem_free(task, sizeof (zvol_task_t));
 		return (0);
 	}

@@ -1994,6 +1994,32 @@ A sparse volume can become thick provisioned by setting
 .Sy refreservation
 to
 .Sy auto .
+.It Sy volblocksectorhint Ns = Ns Ar size
+For volumes, specifies the physical block size reported by the block device,
+i.e. the smallest unit that consumers should write to avoid
+read-modify-write cycles.
+Any power of 2 from 512 bytes to 128 KiB is valid.
+The default value of
+.Sy 0
+reports
+.Sy volblocksize .
+.Pp
+Changes take effect immediately if the platform can update the block device
+in place, or otherwise once the volume is not open.
+This property is only supported on Linux.
+.It Sy volblocksectorsize Ns = Ns Ar size
+For volumes, specifies the logical block (sector) size of the block device,
+i.e. the unit in which it is addressed.
+Any power of 2 from 512 bytes to 128 KiB is valid, although the platform may
+support a smaller range, in which case 512 bytes is used.
+The default value of
+.Sy 0
+selects 512 bytes.
+.Pp
+Changing this property changes how data addressed in logical blocks,
+such as partition tables, is interpreted.
+Changes take effect once the volume is not open.
+This property is only supported on Linux.
 .It Sy volmode Ns = Ns Sy default Ns | Ns Sy full Ns | Ns Sy geom Ns | Ns Sy dev Ns | Ns Sy none
 This property specifies how volumes should be exposed to the OS.
 Setting it to

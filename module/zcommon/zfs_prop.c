@@ -740,6 +740,12 @@ zfs_prop_init(void)
 	    "special_small_blocks", 0, PROP_INHERIT,
 	    ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME, "0 to 16M",
 	    "SPECIAL_SMALL_BLOCKS", B_FALSE, sfeatures);
+	zprop_register_number(ZFS_PROP_VOLBLKSECTORSIZE, "volblocksectorsize",
+	    0, PROP_INHERIT, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME,
+	    "0 | 512 to 128k, power of 2", "VOLBLKSECSIZE", B_FALSE, sfeatures);
+	zprop_register_number(ZFS_PROP_VOLBLKSECTORHINT, "volblocksectorhint",
+	    0, PROP_INHERIT, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME,
+	    "0 | 512 to 128k, power of 2", "VOLBLKSECHINT", B_FALSE, sfeatures);
 
 	/* hidden properties */
 	zprop_register_hidden(ZFS_PROP_NUMCLONES, "numclones", PROP_TYPE_NUMBER,

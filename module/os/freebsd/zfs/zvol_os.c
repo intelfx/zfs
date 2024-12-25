@@ -1612,6 +1612,16 @@ zvol_os_set_capacity(zvol_state_t *zv, uint64_t capacity)
 	 */
 }
 
+int
+zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
+    uint64_t sectorhint)
+{
+	/* Not supported; GEOM providers always use DEV_BSIZE sectors. */
+	zv->zv_sectorsize = sectorsize;
+	zv->zv_sectorhint = sectorhint;
+	return (0);
+}
+
 /*
  * Public interfaces
  */

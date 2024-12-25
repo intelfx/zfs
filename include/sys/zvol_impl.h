@@ -32,6 +32,7 @@
 #define	ZVOL_WRITTEN_TO	(1<<1)	/* zvol has been written to (needs flush) */
 #define	ZVOL_EXCL	(1<<2)	/* zvol has O_EXCL client right now */
 #define	ZVOL_REMOVING	(1<<3)	/* zvol waiting to remove minor */
+#define	ZVOL_TOPOLOGY_PENDING	(1<<4)	/* apply topology on last close */
 
 /*
  * The in-core state of each volume.
@@ -59,6 +60,8 @@ typedef struct zvol_state {
 	list_node_t		zv_remove_node;	/* node on removal list */
 	struct zvol_state_os	*zv_zso;	/* private platform state */
 	boolean_t		zv_threading;	/* volthreading property */
+	uint64_t		zv_sectorsize;	/* volblocksectorsize property */
+	uint64_t		zv_sectorhint;	/* volblocksectorhint property */
 } zvol_state_t;
 
 /*
@@ -139,5 +142,7 @@ boolean_t zvol_os_is_zvol(const char *path);
 void zvol_os_remove_minor(zvol_state_t *zv);
 void zvol_os_set_disk_ro(zvol_state_t *zv, int flags);
 void zvol_os_set_capacity(zvol_state_t *zv, uint64_t capacity);
+int zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
+    uint64_t sectorhint);
 
 #endif
