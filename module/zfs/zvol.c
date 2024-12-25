@@ -117,6 +117,7 @@ typedef enum {
 	ZVOL_ASYNC_RENAME_MINORS,
 	ZVOL_ASYNC_SET_SNAPDEV,
 	ZVOL_ASYNC_SET_VOLMODE,
+	ZVOL_ASYNC_SET_TOPOLOGY,
 	ZVOL_ASYNC_MAX
 } zvol_async_op_t;
 
@@ -1949,6 +1950,9 @@ zvol_task_cb(void *arg)
 	case ZVOL_ASYNC_SET_VOLMODE:
 		zvol_set_volmode_impl(task);
 		break;
+	case ZVOL_ASYNC_SET_TOPOLOGY:
+		zvol_set_topology_impl(task);
+		break;
 	default:
 		VERIFY(0);
 		break;
@@ -2001,11 +2005,21 @@ zvol_set_common_sync_cb(dsl_pool_t *dp, dsl_dataset_t *ds, void *arg)
 		return (0);
 
 	task = kmem_zalloc(sizeof (zvol_task_t), KM_SLEEP);
-	if (zsda->zsda_prop == ZFS_PROP_VOLMODE) {
+	switch (zsda->zsda_prop) {
+	case ZFS_PROP_VOLMODE:
 		task->zt_op = ZVOL_ASYNC_SET_VOLMODE;
-	} else if (zsda->zsda_prop == ZFS_PROP_SNAPDEV) {
+		break;
+
+	case ZFS_PROP_SNAPDEV:
 		task->zt_op = ZVOL_ASYNC_SET_SNAPDEV;
-	} else {
+		break;
+
+	case ZFS_PROP_VOLBLKSECTORSIZE:
+	case ZFS_PROP_VOLBLKSECTORHINT:
+		task->zt_op = ZVOL_ASYNC_SET_TOPOLOGY;
+		break;
+
+	default:
 		kmem_free(task, sizeof (zvol_task_t));
 		return (0);
 	}

@@ -59,6 +59,8 @@ typedef struct zvol_state {
 	list_node_t		zv_remove_node;	/* node on removal list */
 	struct zvol_state_os	*zv_zso;	/* private platform state */
 	boolean_t		zv_threading;	/* volthreading property */
+	uint64_t		zv_sectorsize; /* blkdev logical sector size */
+	uint64_t		zv_sectorhint; /* blkdev physical (hint) sector size */
 } zvol_state_t;
 
 /*

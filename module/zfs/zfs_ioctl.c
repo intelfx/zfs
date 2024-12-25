@@ -2713,6 +2713,8 @@ zfs_prop_set_special(const char *dsname, zprop_source_t source,
 		break;
 	case ZFS_PROP_SNAPDEV:
 	case ZFS_PROP_VOLMODE:
+	case ZFS_PROP_VOLBLKSECTORSIZE:
+	case ZFS_PROP_VOLBLKSECTORHINT:
 		err = zvol_set_common(dsname, prop, source, intval);
 		break;
 	case ZFS_PROP_READONLY:

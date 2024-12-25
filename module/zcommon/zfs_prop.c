@@ -730,6 +730,12 @@ zfs_prop_init(void)
 	    "defaultprojectobjquota", 0, PROP_DEFAULT,
 	    ZFS_TYPE_FILESYSTEM | ZFS_TYPE_SNAPSHOT, "<size> | none",
 	    "DEFAULTPROJECTOBJQUOTA", B_FALSE, sfeatures);
+	zprop_register_number(ZFS_PROP_VOLBLKSECTORSIZE, "volblocksectorsize",
+	    0, PROP_DEFAULT, ZFS_TYPE_VOLUME, "512 to 128k, power of 2",
+	    "VOLBLKSECSIZE", B_FALSE, sfeatures);
+	zprop_register_number(ZFS_PROP_VOLBLKSECTORHINT, "volblocksectorhint",
+	    0, PROP_DEFAULT, ZFS_TYPE_VOLUME, "512 to 128k, power of 2",
+	    "VOLBLKSECHINT", B_FALSE, sfeatures);
 
 	/* inherit number properties */
 	zprop_register_number(ZFS_PROP_RECORDSIZE, "recordsize",
