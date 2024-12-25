@@ -380,6 +380,26 @@ zvol_set_volthreading(const char *name, boolean_t value)
 	return (0);
 }
 
+int
+zvol_set_volblksectorsize(const char *name, uint64_t value)
+{
+	zvol_state_t *zv = zvol_find_by_name(name, RW_NONE);
+	if (zv == NULL)
+		return (ENOENT);
+	return (EINVAL);
+	mutex_exit(&zv->zv_state_lock);
+}
+
+int
+zvol_set_volblksectorhint(const char *name, uint64_t value)
+{
+	zvol_state_t *zv = zvol_find_by_name(name, RW_NONE);
+	if (zv == NULL)
+		return (ENOENT);
+	return (EINVAL);
+	mutex_exit(&zv->zv_state_lock);
+}
+
 /*
  * Update zvol ro property.
  */
