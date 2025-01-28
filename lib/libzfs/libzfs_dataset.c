@@ -3644,7 +3644,7 @@ ancestorerr:
 int
 zfs_create_ancestors(libzfs_handle_t *hdl, const char *path)
 {
-	return zfs_create_ancestors_props(hdl, path, NULL);
+	return (zfs_create_ancestors_props(hdl, path, NULL));
 }
 
 /*
