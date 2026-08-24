@@ -74,11 +74,11 @@
 #define	kfpu_init()		(0)
 #define	kfpu_fini()		do {} while (0)
 
-#define	get_ftr(id) {				\
+#define	get_ftr(id) ({				\
 	unsigned long __val;			\
 	asm("mrs %0, "#id : "=r" (__val));	\
 	__val;					\
-}
+})
 
 /*
  * Check if NEON is available
@@ -86,7 +86,7 @@
 static inline boolean_t
 zfs_neon_available(void)
 {
-	unsigned long ftr = ((get_ftr(ID_AA64PFR0_EL1)) >> 16) & 0xf;
+	unsigned long ftr = (get_ftr(ID_AA64PFR0_EL1) >> 16) & 0xf;
 	return (ftr == 0 || ftr == 1);
 }
 
@@ -96,7 +96,7 @@ zfs_neon_available(void)
 static inline boolean_t
 zfs_sha256_available(void)
 {
-	unsigned long ftr = ((get_ftr(ID_AA64ISAR0_EL1)) >> 12) & 0x3;
+	unsigned long ftr = (get_ftr(ID_AA64ISAR0_EL1) >> 12) & 0x3;
 	return (ftr & 0x1);
 }
 
@@ -106,7 +106,7 @@ zfs_sha256_available(void)
 static inline boolean_t
 zfs_sha512_available(void)
 {
-	unsigned long ftr = ((get_ftr(ID_AA64ISAR0_EL1)) >> 12) & 0x3;
+	unsigned long ftr = (get_ftr(ID_AA64ISAR0_EL1) >> 12) & 0x3;
 	return (ftr & 0x2);
 }
 
