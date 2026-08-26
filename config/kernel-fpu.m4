@@ -3,6 +3,13 @@ dnl #
 dnl # Handle differences in kernel FPU code.
 dnl #
 dnl # Kernel
+dnl # 7.0:	arm64: kernel_neon_{begin,end}() take a caller-provided save
+dnl #		area.  Fall back to the generic kernel mode FPU API, which
+dnl #		keeps providing the argument-less flavour.
+dnl #		HAVE_KERNEL_FPU_GENERIC
+dnl #
+dnl # 6.10:	Generic kernel mode FPU API in <asm/fpu.h>.
+dnl #
 dnl # 5.19:	The asm/fpu/internal.h header was removed, it has been
 dnl #		effectively empty since the 5.16 kernel.
 dnl #
@@ -86,6 +93,13 @@ AC_DEFUN([ZFS_AC_KERNEL_SRC_FPU], [
 		kernel_neon_begin();
 		kernel_neon_end();
 	], [], [ZFS_META_LICENSE])
+
+	ZFS_LINUX_TEST_SRC([kernel_fpu_generic], [
+		#include <asm/fpu.h>
+	], [
+		kernel_fpu_begin();
+		kernel_fpu_end();
+	], [], [ZFS_META_LICENSE])
 ])
 
 AC_DEFUN([ZFS_AC_KERNEL_FPU], [
@@ -121,10 +135,21 @@ AC_DEFUN([ZFS_AC_KERNEL_FPU], [
 				AC_DEFINE(HAVE_KERNEL_NEON, 1,
 				    [kernel has kernel_neon_* functions])
 			],[
-				# catch-all
-				AC_MSG_RESULT(internal)
-				AC_DEFINE(HAVE_KERNEL_FPU_INTERNAL, 1,
-				    [kernel fpu internal])
+				dnl #
+				dnl # Linux 6.10 generic kernel mode FPU API,
+				dnl # which arm64 keeps compatible across the
+				dnl # Linux 7.0 kernel_neon_*() change.
+				dnl #
+				ZFS_LINUX_TEST_RESULT([kernel_fpu_generic_license],[
+					AC_MSG_RESULT(generic kernel_fpu_*)
+					AC_DEFINE(HAVE_KERNEL_FPU_GENERIC, 1,
+					    [kernel has generic kernel_fpu_* API])
+				],[
+					# catch-all
+					AC_MSG_RESULT(internal)
+					AC_DEFINE(HAVE_KERNEL_FPU_INTERNAL, 1,
+					    [kernel fpu internal])
+				])
 			])
 		])
 	])

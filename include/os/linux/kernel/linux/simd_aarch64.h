@@ -59,6 +59,10 @@
 #include <linux/version.h>
 #include <asm/sysreg.h>
 
+#if defined(HAVE_KERNEL_FPU_GENERIC)
+#include <asm/fpu.h>
+#endif
+
 #define	ID_AA64PFR0_EL1		sys_reg(3, 0, 0, 1, 0)
 #define	ID_AA64ISAR0_EL1	sys_reg(3, 0, 0, 6, 0)
 
@@ -66,6 +70,17 @@
 #define	kfpu_allowed()		1
 #define	kfpu_begin()		kernel_neon_begin()
 #define	kfpu_end()		kernel_neon_end()
+#elif (defined(HAVE_KERNEL_FPU_GENERIC) && defined(CONFIG_KERNEL_MODE_NEON))
+/*
+ * Linux 7.0 gave arm64's kernel_neon_begin()/kernel_neon_end() a
+ * struct user_fpsimd_state * argument for the kernel mode FPSIMD save area,
+ * which kfpu_begin()/kfpu_end() cannot supply as two independent macros.
+ * The generic kernel mode FPU wrappers keep the argument-less flavour by
+ * confining the region to non-preemptible task context, matching x86.
+ */
+#define	kfpu_allowed()		1
+#define	kfpu_begin()		kernel_fpu_begin()
+#define	kfpu_end()		kernel_fpu_end()
 #else
 #define	kfpu_allowed()		0
 #define	kfpu_begin()		do {} while (0)
