@@ -3,6 +3,8 @@ dnl #
 dnl # Handle differences in kernel FPU code.
 dnl #
 dnl # Kernel
+dnl # 6.10:     Use new generic kernel_fpu_{begin_end}() API in <asm/fpu.h>
+dnl #
 dnl # 5.19:	The asm/fpu/internal.h header was removed, it has been
 dnl #		effectively empty since the 5.16 kernel.
 dnl #
@@ -26,25 +28,34 @@ AC_DEFUN([ZFS_AC_KERNEL_FPU_HEADER], [
 	AC_MSG_CHECKING([whether fpu headers are available])
 	ZFS_LINUX_TRY_COMPILE([
 		#include <linux/module.h>
-		#include <asm/fpu/api.h>
+		#include <asm/fpu.h>
 	],[
 	],[
-		AC_DEFINE(HAVE_KERNEL_FPU_API_HEADER, 1,
-		    [kernel has asm/fpu/api.h])
-
+		AC_DEFINE(HAVE_KERNEL_FPU_HEADER, 1,
+		    [kernel has asm/fpu.h])
+	],[
 		ZFS_LINUX_TRY_COMPILE([
 			#include <linux/module.h>
-			#include <asm/fpu/internal.h>
+			#include <asm/fpu/api.h>
 		],[
 		],[
-			AC_DEFINE(HAVE_KERNEL_FPU_INTERNAL_HEADER, 1,
-			    [kernel has asm/fpu/internal.h])
-			AC_MSG_RESULT([asm/fpu/api.h asm/fpu/internal.h])
+			AC_DEFINE(HAVE_KERNEL_FPU_API_HEADER, 1,
+			    [kernel has asm/fpu/api.h])
+
+			ZFS_LINUX_TRY_COMPILE([
+				#include <linux/module.h>
+				#include <asm/fpu/internal.h>
+			],[
+			],[
+				AC_DEFINE(HAVE_KERNEL_FPU_INTERNAL_HEADER, 1,
+				    [kernel has asm/fpu/internal.h])
+				AC_MSG_RESULT([asm/fpu/api.h asm/fpu/internal.h])
+			],[
+				AC_MSG_RESULT([asm/fpu/api.h])
+			])
 		],[
-			AC_MSG_RESULT([asm/fpu/api.h])
+			AC_MSG_RESULT([i387.h])
 		])
-	],[
-		AC_MSG_RESULT([i387.h])
 	])
 
 ])
@@ -52,9 +63,11 @@ AC_DEFUN([ZFS_AC_KERNEL_FPU_HEADER], [
 AC_DEFUN([ZFS_AC_KERNEL_SRC_FPU], [
 	ZFS_LINUX_TEST_SRC([kernel_fpu], [
 		#include <linux/types.h>
-		#ifdef HAVE_KERNEL_FPU_API_HEADER
+		#if defined(HAVE_KERNEL_FPU_HEADER)
+		#include <asm/fpu.h>
+		#elif defined(HAVE_KERNEL_FPU_API_HEADER)
 		#include <asm/fpu/api.h>
-		#ifdef HAVE_KERNEL_FPU_INTERNAL_HEADER
+		#if defined(HAVE_KERNEL_FPU_INTERNAL_HEADER)
 		#include <asm/fpu/internal.h>
 		#endif
 		#else
@@ -67,9 +80,11 @@ AC_DEFUN([ZFS_AC_KERNEL_SRC_FPU], [
 
 	ZFS_LINUX_TEST_SRC([__kernel_fpu], [
 		#include <linux/types.h>
-		#ifdef HAVE_KERNEL_FPU_API_HEADER
+		#if defined(HAVE_KERNEL_FPU_HEADER)
+		#include <asm/fpu.h>
+		#elif defined (HAVE_KERNEL_FPU_API_HEADER)
 		#include <asm/fpu/api.h>
-		#ifdef HAVE_KERNEL_FPU_INTERNAL_HEADER
+		#if defined(HAVE_KERNEL_FPU_INTERNAL_HEADER)
 		#include <asm/fpu/internal.h>
 		#endif
 		#else
@@ -90,7 +105,7 @@ AC_DEFUN([ZFS_AC_KERNEL_SRC_FPU], [
 
 AC_DEFUN([ZFS_AC_KERNEL_FPU], [
 	dnl #
-	dnl # Legacy kernel
+	dnl # Legacy kernel, or 6.10+ (new generic API)
 	dnl #
 	AC_MSG_CHECKING([whether kernel fpu is available])
 	ZFS_LINUX_TEST_RESULT([kernel_fpu_license], [

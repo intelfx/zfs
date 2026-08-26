@@ -94,7 +94,9 @@
  */
 #if defined(KERNEL_EXPORTS_X86_FPU)
 
-#if defined(HAVE_KERNEL_FPU_API_HEADER)
+#if defined(HAVE_KERNEL_FPU_HEADER)
+#include <asm/fpu.h>
+#elif defined(HAVE_KERNEL_FPU_API_HEADER)
 #include <asm/fpu/api.h>
 #if defined(HAVE_KERNEL_FPU_INTERNAL_HEADER)
 #include <asm/fpu/internal.h>
