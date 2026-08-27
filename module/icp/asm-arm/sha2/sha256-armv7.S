@@ -22,7 +22,15 @@
 
 #if defined(__arm__)
 
-#ifndef __ARM_ARCH
+/*
+ * The Linux kernel preprocesses assembler sources without -march=, so
+ * __ARM_ARCH reflects the toolchain default rather than the target and cannot
+ * be used here.  arch/arm supplies __LINUX_ARM_ARCH__ for this purpose; see
+ * lib/crypto/arm/sha1-armv4-large.S for the same treatment in-tree.
+ */
+#ifdef __LINUX_ARM_ARCH__
+# define __ARM_ARCH__	__LINUX_ARM_ARCH__
+#elif !defined(__ARM_ARCH)
 # define __ARM_ARCH__	7
 #else
 # define __ARM_ARCH__	__ARM_ARCH
