@@ -109,6 +109,14 @@ typedef struct {
 
 static chksum_stat_t *chksum_stat_data = 0;
 static kstat_t *chksum_kstat = NULL;
+
+/*
+ * The legacy fletcher_4_bench kstat is a view onto the fletcher4 rows of the
+ * same data: chksum_stat_data[fletcher4_row .. +fletcher_4_impl_getcnt()] for
+ * the native direction, followed by the byteswapping one.
+ */
+static kstat_t *fletcher_4_kstat = NULL;
+static int fletcher_4_row = 0;
 static int chksum_stat_limit = AT_STARTUP;
 static int chksum_stat_cnt = 0;
 static void chksum_benchmark(void);
@@ -240,6 +248,70 @@ chksum_kstat_data(char *buf, size_t size, void *data)
 	(void) kmem_scnprintf(buf + off, size - off, "\n");
 
 	return (0);
+}
+
+/*
+ * Legacy fletcher_4_bench kstat.  Same layout it has always had - one row per
+ * implementation plus a "fastest" row, throughput in B/s - but served from the
+ * measurements above, taken at 128k as the standalone benchmark used to.
+ */
+static int
+fletcher_4_kstat_headers(char *buf, size_t size)
+{
+	ssize_t off = 0;
+
+	off += kmem_scnprintf(buf + off, size, "%-17s", "implementation");
+	off += kmem_scnprintf(buf + off, size - off, "%-15s", "native");
+	(void) kmem_scnprintf(buf + off, size - off, "%-15s\n", "byteswap");
+
+	return (0);
+}
+
+static int
+fletcher_4_kstat_data(char *buf, size_t size, void *data)
+{
+	uint32_t cnt = fletcher_4_impl_getcnt();
+	ptrdiff_t id = (chksum_stat_t *)data - &chksum_stat_data[
+	    fletcher_4_row];
+	ssize_t off = 0;
+
+	if (id == cnt) {
+		off += kmem_scnprintf(buf + off, size - off, "%-17s",
+		    "fastest");
+		off += kmem_scnprintf(buf + off, size - off, "%-15s",
+		    fletcher_4_impl_get_effective_name(B_FALSE));
+		(void) kmem_scnprintf(buf + off, size - off, "%-15s\n",
+		    fletcher_4_impl_get_effective_name(B_TRUE));
+	} else {
+		const chksum_stat_t *native = &chksum_stat_data[
+		    fletcher_4_row + id];
+		const chksum_stat_t *bswap = native + cnt + 1;
+
+		off += kmem_scnprintf(buf + off, size - off, "%-17s",
+		    native->impl);
+		off += kmem_scnprintf(buf + off, size - off, "%-15llu",
+		    (u_longlong_t)native->bs[CHKSUM_BS_SELECT]);
+		(void) kmem_scnprintf(buf + off, size - off, "%-15llu\n",
+		    (u_longlong_t)bswap->bs[CHKSUM_BS_SELECT]);
+	}
+
+	return (0);
+}
+
+static void *
+fletcher_4_kstat_addr(kstat_t *ksp, loff_t n)
+{
+	/*
+	 * The 128k round is filled during the startup pass, so unlike
+	 * chksum_bench this does not have to trigger the full benchmark.
+	 */
+	if (chksum_stat_cnt > 0 && n <= fletcher_4_impl_getcnt())
+		ksp->ks_private = (void *)(chksum_stat_data +
+		    fletcher_4_row + n);
+	else
+		ksp->ks_private = NULL;
+
+	return (ksp->ks_private);
 }
 
 static void *
@@ -497,14 +569,11 @@ chksum_benchmark(void)
 	blake3->setid(id_save);
 	chksum_summary(&chksum_stat_data[cbid++], "blake3", chksum_impl_blake3);
 
-	/*
-	 * fletcher4.  Unlike the algorithms above, the implementation actually
-	 * used is picked by fletcher_4_init(), which runs its own benchmark;
-	 * we only measure and report here.  The startup pass exists solely to
-	 * select implementations, so skip it.
-	 */
+	/* fletcher4, native and byteswapping */
+	fletcher_4_row = cbid;
 	id_save = fletcher_4_impl_getid();
-	for (id = 0; id < fletcher_4_impl_getcnt(); id++) {
+	for (max = 0, id = 0; id < fletcher_4_impl_getcnt(); id++) {
+		fletcher_4_impl_setid(id);
 		cs = &chksum_stat_data[cbid++];
 		cs->init = 0;
 		cs->func = abd_fletcher_4_native;
@@ -512,24 +581,27 @@ chksum_benchmark(void)
 		cs->name = "fletcher4";
 		cs->impl = fletcher_4_impl_getname(id);
 		cs->ck = ZIO_CHECKSUM_FLETCHER_4;
-		if (chksum_stat_limit != AT_STARTUP) {
-			fletcher_4_impl_setid(id);
-			chksum_benchit(cs);
+		chksum_benchit(cs);
+		if (cs->bs[CHKSUM_BS_SELECT] > max) {
+			max = cs->bs[CHKSUM_BS_SELECT];
+			fletcher_4_impl_set_fastest(id, B_FALSE);
 		}
 	}
 	chksum_summary(&chksum_stat_data[cbid++], "fletcher4",
 	    chksum_impl_fletcher_4_native);
 
-	for (id = 0; id < fletcher_4_impl_getcnt(); id++) {
+	for (max = 0, id = 0; id < fletcher_4_impl_getcnt(); id++) {
+		fletcher_4_impl_setid(id);
 		cs = &chksum_stat_data[cbid++];
 		cs->init = 0;
 		cs->func = abd_fletcher_4_byteswap;
 		cs->free = 0;
 		cs->name = "fletcher4_bswap";
 		cs->impl = fletcher_4_impl_getname(id);
-		if (chksum_stat_limit != AT_STARTUP) {
-			fletcher_4_impl_setid(id);
-			chksum_benchit(cs);
+		chksum_benchit(cs);
+		if (cs->bs[CHKSUM_BS_SELECT] > max) {
+			max = cs->bs[CHKSUM_BS_SELECT];
+			fletcher_4_impl_set_fastest(id, B_TRUE);
 		}
 	}
 	chksum_summary(&chksum_stat_data[cbid++], "fletcher4_bswap",
@@ -581,11 +653,29 @@ chksum_init(void)
 		    chksum_kstat_addr);
 		kstat_install(chksum_kstat);
 	}
+
+	fletcher_4_kstat = kstat_create("zfs", 0, "fletcher_4_bench", "misc",
+	    KSTAT_TYPE_RAW, 0, KSTAT_FLAG_VIRTUAL);
+
+	if (fletcher_4_kstat != NULL) {
+		fletcher_4_kstat->ks_data = NULL;
+		fletcher_4_kstat->ks_ndata = UINT32_MAX;
+		kstat_set_raw_ops(fletcher_4_kstat,
+		    fletcher_4_kstat_headers,
+		    fletcher_4_kstat_data,
+		    fletcher_4_kstat_addr);
+		kstat_install(fletcher_4_kstat);
+	}
 }
 
 void
 chksum_fini(void)
 {
+	if (fletcher_4_kstat != NULL) {
+		kstat_delete(fletcher_4_kstat);
+		fletcher_4_kstat = NULL;
+	}
+
 	if (chksum_kstat != NULL) {
 		kstat_delete(chksum_kstat);
 		chksum_kstat = NULL;

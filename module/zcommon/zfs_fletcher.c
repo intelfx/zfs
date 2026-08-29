@@ -171,6 +171,14 @@ static fletcher_4_ops_t fletcher_4_fastest_impl = {
 	.valid = fletcher_4_scalar_valid
 };
 
+#define	FLETCHER_4_FASTEST_FN_COPY(type, src)				  \
+{									  \
+	fletcher_4_fastest_impl.init_ ## type = src->init_ ## type;	  \
+	fletcher_4_fastest_impl.fini_ ## type = src->fini_ ## type;	  \
+	fletcher_4_fastest_impl.compute_ ## type = src->compute_ ## type; \
+	fletcher_4_fastest_impl.uses_fpu = src->uses_fpu;		  \
+}
+
 static const fletcher_4_ops_t *fletcher_4_impls[] = {
 	&fletcher_4_scalar_ops,
 	&fletcher_4_superscalar_ops,
@@ -220,15 +228,6 @@ static struct fletcher_4_impl_selector {
 /* Indexes into fletcher_4_supp_impls[] of the fastest implementations */
 static uint32_t fletcher_4_fastest_native = 0;
 static uint32_t fletcher_4_fastest_byteswap = 0;
-
-#if defined(_KERNEL)
-static kstat_t *fletcher_4_kstat;
-
-static struct fletcher_4_kstat {
-	uint64_t native;
-	uint64_t byteswap;
-} fletcher_4_stat_data[ARRAY_SIZE(fletcher_4_impls) + 1];
-#endif
 
 /* Indicate that benchmark has been completed */
 static boolean_t fletcher_4_initialized = B_FALSE;
@@ -449,6 +448,26 @@ fletcher_4_impl_setid(uint32_t id)
 	    id < fletcher_4_supp_impls_cnt);
 
 	atomic_swap_32(&fletcher_4_impl_chosen, id);
+	membar_producer();
+}
+
+/*
+ * Record the benchmark winner for one direction.  Called by the checksum
+ * benchmark, which owns the measurements for every algorithm.
+ */
+void
+fletcher_4_impl_set_fastest(uint32_t id, boolean_t byteswap)
+{
+	fletcher_4_impl_init();
+	ASSERT3U(id, <, fletcher_4_supp_impls_cnt);
+
+	if (byteswap) {
+		fletcher_4_fastest_byteswap = id;
+		FLETCHER_4_FASTEST_FN_COPY(byteswap, fletcher_4_supp_impls[id]);
+	} else {
+		fletcher_4_fastest_native = id;
+		FLETCHER_4_FASTEST_FN_COPY(native, fletcher_4_supp_impls[id]);
+	}
 	membar_producer();
 }
 
@@ -679,133 +698,6 @@ fletcher_4_incremental_byteswap(void *buf, size_t size, void *data)
 	return (0);
 }
 
-#if defined(_KERNEL)
-/*
- * Fletcher 4 kstats
- */
-static int
-fletcher_4_kstat_headers(char *buf, size_t size)
-{
-	ssize_t off = 0;
-
-	off += snprintf(buf + off, size, "%-17s", "implementation");
-	off += snprintf(buf + off, size - off, "%-15s", "native");
-	(void) snprintf(buf + off, size - off, "%-15s\n", "byteswap");
-
-	return (0);
-}
-
-static int
-fletcher_4_kstat_data(char *buf, size_t size, void *data)
-{
-	struct fletcher_4_kstat *fastest_stat =
-	    &fletcher_4_stat_data[fletcher_4_supp_impls_cnt];
-	struct fletcher_4_kstat *curr_stat = (struct fletcher_4_kstat *)data;
-	ssize_t off = 0;
-
-	if (curr_stat == fastest_stat) {
-		off += snprintf(buf + off, size - off, "%-17s", "fastest");
-		off += snprintf(buf + off, size - off, "%-15s",
-		    fletcher_4_impl_get_effective_name(B_FALSE));
-		(void) snprintf(buf + off, size - off, "%-15s\n",
-		    fletcher_4_impl_get_effective_name(B_TRUE));
-	} else {
-		ptrdiff_t id = curr_stat - fletcher_4_stat_data;
-
-		off += snprintf(buf + off, size - off, "%-17s",
-		    fletcher_4_supp_impls[id]->name);
-		off += snprintf(buf + off, size - off, "%-15llu",
-		    (u_longlong_t)curr_stat->native);
-		(void) snprintf(buf + off, size - off, "%-15llu\n",
-		    (u_longlong_t)curr_stat->byteswap);
-	}
-
-	return (0);
-}
-
-static void *
-fletcher_4_kstat_addr(kstat_t *ksp, loff_t n)
-{
-	if (n <= fletcher_4_supp_impls_cnt)
-		ksp->ks_private = (void *) (fletcher_4_stat_data + n);
-	else
-		ksp->ks_private = NULL;
-
-	return (ksp->ks_private);
-}
-#endif
-
-#define	FLETCHER_4_FASTEST_FN_COPY(type, src)				  \
-{									  \
-	fletcher_4_fastest_impl.init_ ## type = src->init_ ## type;	  \
-	fletcher_4_fastest_impl.fini_ ## type = src->fini_ ## type;	  \
-	fletcher_4_fastest_impl.compute_ ## type = src->compute_ ## type; \
-	fletcher_4_fastest_impl.uses_fpu = src->uses_fpu;		  \
-}
-
-#define	FLETCHER_4_BENCH_NS	(MSEC2NSEC(1))		/* 1ms */
-
-typedef void fletcher_checksum_func_t(const void *, uint64_t, const void *,
-					zio_cksum_t *);
-
-#if defined(_KERNEL)
-static void
-fletcher_4_benchmark_impl(boolean_t native, char *data, uint64_t data_size)
-{
-
-	hrtime_t start;
-	uint64_t run_bw, run_time_ns, best_run = 0;
-	zio_cksum_t zc;
-	uint32_t i, l, sel_save = IMPL_READ(fletcher_4_impl_chosen);
-
-	fletcher_checksum_func_t *fletcher_4_test = native ?
-	    fletcher_4_native : fletcher_4_byteswap;
-
-	for (i = 0; i < fletcher_4_supp_impls_cnt; i++) {
-		struct fletcher_4_kstat *stat = &fletcher_4_stat_data[i];
-		uint64_t run_count = 0;
-
-		/* temporary set an implementation */
-		fletcher_4_impl_chosen = i;
-
-		kpreempt_disable();
-		start = gethrtime();
-		do {
-			for (l = 0; l < 32; l++, run_count++)
-				fletcher_4_test(data, data_size, NULL, &zc);
-
-			run_time_ns = gethrtime() - start;
-		} while (run_time_ns < FLETCHER_4_BENCH_NS);
-		kpreempt_enable();
-
-		run_bw = data_size * run_count * NANOSEC;
-		run_bw /= run_time_ns;	/* B/s */
-
-		if (native)
-			stat->native = run_bw;
-		else
-			stat->byteswap = run_bw;
-
-		if (run_bw > best_run) {
-			best_run = run_bw;
-
-			if (native) {
-				fletcher_4_fastest_native = i;
-				FLETCHER_4_FASTEST_FN_COPY(native,
-				    fletcher_4_supp_impls[i]);
-			} else {
-				fletcher_4_fastest_byteswap = i;
-				FLETCHER_4_FASTEST_FN_COPY(byteswap,
-				    fletcher_4_supp_impls[i]);
-			}
-		}
-	}
-
-	/* restore original selection */
-	atomic_swap_32(&fletcher_4_impl_chosen, sel_save);
-}
-#endif /* _KERNEL */
-
 /*
  * Determine the supported implementations and pick a provisional fastest one.
  *
@@ -847,48 +739,15 @@ fletcher_4_impl_init(void)
 	membar_producer();
 }
 
-/*
- * Initialize and benchmark all supported implementations.
- */
-static void
-fletcher_4_benchmark(void)
-{
-	fletcher_4_impl_init();
-
-#if defined(_KERNEL)
-	static const size_t data_size = 1 << SPA_OLD_MAXBLOCKSHIFT; /* 128kiB */
-	char *databuf = vmem_alloc(data_size, KM_SLEEP);
-
-	for (int i = 0; i < data_size / sizeof (uint64_t); i++)
-		((uint64_t *)databuf)[i] = (uintptr_t)(databuf+i); /* warm-up */
-
-	fletcher_4_benchmark_impl(B_FALSE, databuf, data_size);
-	fletcher_4_benchmark_impl(B_TRUE, databuf, data_size);
-
-	vmem_free(databuf, data_size);
-#endif /* _KERNEL */
-}
-
 void
 fletcher_4_init(void)
 {
-	/* Determine the fastest available implementation. */
-	fletcher_4_benchmark();
-
-#if defined(_KERNEL)
-	/* Install kstats for all implementations */
-	fletcher_4_kstat = kstat_create("zfs", 0, "fletcher_4_bench", "misc",
-	    KSTAT_TYPE_RAW, 0, KSTAT_FLAG_VIRTUAL);
-	if (fletcher_4_kstat != NULL) {
-		fletcher_4_kstat->ks_data = NULL;
-		fletcher_4_kstat->ks_ndata = UINT32_MAX;
-		kstat_set_raw_ops(fletcher_4_kstat,
-		    fletcher_4_kstat_headers,
-		    fletcher_4_kstat_data,
-		    fletcher_4_kstat_addr);
-		kstat_install(fletcher_4_kstat);
-	}
-#endif
+	/*
+	 * Determine the supported implementations.  Which of them is the
+	 * fastest is decided by the checksum benchmark in chksum_init(),
+	 * which may run before or after this depending on the platform.
+	 */
+	fletcher_4_impl_init();
 
 	/* Finish initialization */
 	fletcher_4_initialized = B_TRUE;
@@ -897,12 +756,6 @@ fletcher_4_init(void)
 void
 fletcher_4_fini(void)
 {
-#if defined(_KERNEL)
-	if (fletcher_4_kstat != NULL) {
-		kstat_delete(fletcher_4_kstat);
-		fletcher_4_kstat = NULL;
-	}
-#endif
 }
 
 /* ABD adapters */

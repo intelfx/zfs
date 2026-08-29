@@ -1425,10 +1425,10 @@ If multiple implementations of fletcher 4 are available, the
 .Sy fastest
 will be chosen using a micro benchmark.
 You can see the benchmark results by reading these kstat files:
-.Pa /proc/spl/kstat/zfs/fletcher_4_bench
-and
 .Pa /proc/spl/kstat/zfs/chksum_bench ,
-the latter also allowing comparison against the other checksum algorithms.
+which also allows comparison against the other checksum algorithms, and
+.Pa /proc/spl/kstat/zfs/fletcher_4_bench ,
+which reports the same measurements at the 128k block size only.
 Selecting
 .Sy scalar
 results in the original CPU-based calculation being used.

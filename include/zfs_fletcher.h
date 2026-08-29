@@ -76,6 +76,7 @@ extern uint32_t fletcher_4_impl_getcnt(void);
 extern const char *fletcher_4_impl_getname(uint32_t id);
 extern uint32_t fletcher_4_impl_getid(void);
 extern void fletcher_4_impl_setid(uint32_t id);
+extern void fletcher_4_impl_set_fastest(uint32_t id, boolean_t byteswap);
 extern const char *fletcher_4_impl_get_effective_name(boolean_t byteswap);
 
 
