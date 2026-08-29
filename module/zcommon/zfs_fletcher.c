@@ -152,6 +152,7 @@ static void fletcher_4_scalar_native(fletcher_4_ctx_t *ctx,
 static void fletcher_4_scalar_byteswap(fletcher_4_ctx_t *ctx,
     const void *buf, uint64_t size);
 static boolean_t fletcher_4_scalar_valid(void);
+static void fletcher_4_impl_init(void);
 
 static const fletcher_4_ops_t fletcher_4_scalar_ops = {
 	.init_native = fletcher_4_scalar_init,
@@ -426,6 +427,8 @@ fletcher_4_impl_get_effective_name(boolean_t byteswap)
 
 	if (!kfpu_allowed())
 		return (fletcher_4_superscalar4_ops.name);
+
+	fletcher_4_impl_init();
 
 	switch (impl) {
 	case IMPL_FASTEST:
@@ -768,13 +771,21 @@ fletcher_4_benchmark_impl(boolean_t native, char *data, uint64_t data_size)
 #endif /* _KERNEL */
 
 /*
- * Initialize and benchmark all supported implementations.
+ * Determine the supported implementations and pick a provisional fastest one.
+ *
+ * This has to be idempotent and safe to call from any entry point: module init
+ * order differs between platforms, and on FreeBSD spa_init() runs before
+ * zcommon_init() -> fletcher_4_init(), so the table can be needed before the
+ * latter has ever run.
  */
 static void
-fletcher_4_benchmark(void)
+fletcher_4_impl_init(void)
 {
 	fletcher_4_ops_t *curr_impl;
 	int i, c;
+
+	if (likely(fletcher_4_supp_impls_cnt != 0))
+		return;
 
 	/* Move supported implementations into fletcher_4_supp_impls */
 	for (i = 0, c = 0; i < ARRAY_SIZE(fletcher_4_impls); i++) {
@@ -786,30 +797,39 @@ fletcher_4_benchmark(void)
 	membar_producer();	/* complete fletcher_4_supp_impls[] init */
 	fletcher_4_supp_impls_cnt = c;	/* number of supported impl */
 
+	/*
+	 * Until the benchmark has run - and in user space, where it never
+	 * does, to avoid impacting libzpool consumers (zdb, zhack, zinject,
+	 * ztest) - the last implementation, i.e. the most advanced one this
+	 * CPU supports, is assumed to be the fastest.
+	 */
+	fletcher_4_fastest_native = c - 1;
+	fletcher_4_fastest_byteswap = c - 1;
+	memcpy(&fletcher_4_fastest_impl, fletcher_4_supp_impls[c - 1],
+	    sizeof (fletcher_4_fastest_impl));
+	fletcher_4_fastest_impl.name = "fastest";
+	membar_producer();
+}
+
+/*
+ * Initialize and benchmark all supported implementations.
+ */
+static void
+fletcher_4_benchmark(void)
+{
+	fletcher_4_impl_init();
+
 #if defined(_KERNEL)
 	static const size_t data_size = 1 << SPA_OLD_MAXBLOCKSHIFT; /* 128kiB */
 	char *databuf = vmem_alloc(data_size, KM_SLEEP);
 
-	for (i = 0; i < data_size / sizeof (uint64_t); i++)
+	for (int i = 0; i < data_size / sizeof (uint64_t); i++)
 		((uint64_t *)databuf)[i] = (uintptr_t)(databuf+i); /* warm-up */
 
 	fletcher_4_benchmark_impl(B_FALSE, databuf, data_size);
 	fletcher_4_benchmark_impl(B_TRUE, databuf, data_size);
 
 	vmem_free(databuf, data_size);
-#else
-	/*
-	 * Skip the benchmark in user space to avoid impacting libzpool
-	 * consumers (zdb, zhack, zinject, ztest).  The last implementation
-	 * is assumed to be the fastest and used by default.
-	 */
-	fletcher_4_fastest_native = fletcher_4_supp_impls_cnt - 1;
-	fletcher_4_fastest_byteswap = fletcher_4_supp_impls_cnt - 1;
-	memcpy(&fletcher_4_fastest_impl,
-	    fletcher_4_supp_impls[fletcher_4_fastest_native],
-	    sizeof (fletcher_4_fastest_impl));
-	fletcher_4_fastest_impl.name = "fastest";
-	membar_producer();
 #endif /* _KERNEL */
 }
 
