@@ -46,6 +46,12 @@ typedef struct
 	/* get name of selected implementation */
 	const char *(*getname)(void);
 
+	/*
+	 * get name of the implementation that is actually in effect, i.e.
+	 * resolve the "fastest" selector to the implementation it stands for
+	 */
+	const char *(*get_effective_name)(void);
+
 	/* setup id as fastest implementation */
 	void (*set_fastest)(uint32_t id);
 

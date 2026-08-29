@@ -53,6 +53,9 @@ static IMPL_OPS_T generic_fastest_impl = {
 static const IMPL_OPS_T *generic_supp_impls[ARRAY_SIZE(IMPL_ARRAY)];
 static uint32_t generic_supp_impls_cnt = 0;
 
+/* Index of the implementation held by generic_fastest_impl */
+static uint32_t generic_fastest_id = 0;
+
 /* Currently selected implementation */
 static uint32_t generic_impl_chosen = IMPL_FASTEST;
 
@@ -84,6 +87,7 @@ generic_impl_init(void)
 	generic_supp_impls_cnt = c;
 
 	/* first init generic impl, may be changed via set_fastest() */
+	generic_fastest_id = 0;
 	memcpy(&generic_fastest_impl, generic_supp_impls[0],
 	    sizeof (generic_fastest_impl));
 }
@@ -119,6 +123,24 @@ generic_impl_getname(void)
 	default:
 		return (generic_supp_impls[impl]->name);
 	}
+}
+
+/* get name of the implementation that is actually in effect */
+static const char *
+generic_impl_get_effective_name(void)
+{
+	uint32_t impl = IMPL_READ(generic_impl_chosen);
+
+	generic_impl_init();
+	switch (impl) {
+	case IMPL_FASTEST:
+		impl = generic_fastest_id;
+		break;
+	case IMPL_CYCLE:
+		return ("cycle");
+	}
+
+	return (generic_supp_impls[impl]->name);
 }
 
 /* set implementation by id */
@@ -191,6 +213,7 @@ static void
 generic_impl_set_fastest(uint32_t id)
 {
 	generic_impl_init();
+	generic_fastest_id = id;
 	memcpy(&generic_fastest_impl, generic_supp_impls[id],
 	    sizeof (generic_fastest_impl));
 }
@@ -201,6 +224,7 @@ const zfs_impl_t ZFS_IMPL_OPS = {
 	.getcnt = generic_impl_getcnt,
 	.getid = generic_impl_getid,
 	.getname = generic_impl_getname,
+	.get_effective_name = generic_impl_get_effective_name,
 	.set_fastest = generic_impl_set_fastest,
 	.setid = generic_impl_setid,
 	.setname = generic_impl_setname
