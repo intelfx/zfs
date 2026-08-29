@@ -1461,6 +1461,9 @@ If multiple implementations of BLAKE3 are available, the
 .Sy fastest will be chosen using a micro benchmark. You can see the
 benchmark results by reading this kstat file:
 .Pa /proc/spl/kstat/zfs/chksum_bench .
+Each algorithm listed there is followed by a
+.Sy fastest
+row naming the implementation that is actually in use.
 .
 .It Sy zfs_free_bpobj_enabled Ns = Ns Sy 1 Ns | Ns 0 Pq int
 Enable/disable the processing of the free_bpobj object.

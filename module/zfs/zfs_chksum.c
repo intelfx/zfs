@@ -47,6 +47,13 @@ typedef struct {
 	zio_checksum_t *(func);
 	zio_checksum_tmpl_init_t *(init);
 	zio_checksum_tmpl_free_t *(free);
+
+	/*
+	 * Only set on the summary row of an algorithm.  Such a row carries no
+	 * timings; instead it names the implementation that would be used for
+	 * a checksum computed right now.
+	 */
+	const char *(*used_impl)(void);
 } chksum_stat_t;
 
 #define	AT_STARTUP	0
@@ -60,26 +67,34 @@ static int chksum_stat_cnt = 0;
 static void chksum_benchmark(void);
 
 /*
- * Sample output on i3-1005G1 System:
+ * Sample output on i3-1005G1 System.  Every algorithm is followed by a
+ * "-fastest" row, which carries no timings and instead names the
+ * implementation that a checksum computed right now would use - the benchmark
+ * winner, unless the algorithm's module parameter pins a specific one.
  *
  * implementation   1k      4k     16k     64k    256k      1m      4m     16m
  * edonr-generic  1278    1625    1769    1776    1783    1778    1771    1767
+ * edonr-fastest         generic
  * skein-generic   548     594     613     623     621     623     621     486
+ * skein-fastest         generic
  * sha256-generic  255     270     281     278     279     281     283     283
  * sha256-x64      288     310     316     317     318     317     317     316
  * sha256-ssse3    304     342     351     355     356     357     356     356
  * sha256-avx      311     348     359     362     362     363     363     362
  * sha256-avx2     330     378     389     395     395     395     395     395
  * sha256-shani    908    1127    1212    1230    1233    1234    1223    1230
+ * sha256-fastest          shani
  * sha512-generic  359     409     431     427     429     430     428     423
  * sha512-x64      420     473     490     496     497     497     496     495
  * sha512-avx      406     522     546     560     560     560     556     560
  * sha512-avx2     464     568     601     606     609     610     607     608
+ * sha512-fastest           avx2
  * blake3-generic  330     327     324     323     324     320     323     322
  * blake3-sse2     424    1366    1449    1468    1458    1453    1395    1408
  * blake3-sse41    453    1554    1658    1703    1689    1669    1622    1630
  * blake3-avx2     452    2013    3225    3351    3356    3261    3076    3101
  * blake3-avx512   498    2869    5269    5926    5872    5643    5014    5005
+ * blake3-fastest         avx512
  */
 static int
 chksum_kstat_headers(char *buf, size_t size)
@@ -109,6 +124,14 @@ chksum_kstat_data(char *buf, size_t size, void *data)
 	cs = (chksum_stat_t *)data;
 	kmem_scnprintf(b, 23, "%s-%s", cs->name, cs->impl);
 	off += kmem_scnprintf(buf + off, size - off, "%-23s", b);
+
+	/* summary row: name the implementation in use instead of timings */
+	if (cs->used_impl != NULL) {
+		(void) kmem_scnprintf(buf + off, size - off, "%8s\n",
+		    cs->used_impl());
+		return (0);
+	}
+
 	off += kmem_scnprintf(buf + off, size - off, "%8llu",
 	    (u_longlong_t)cs->bs1k);
 	off += kmem_scnprintf(buf + off, size - off, "%8llu",
@@ -186,6 +209,43 @@ chksum_run(chksum_stat_t *cs, abd_t *abd, void *ctx, int round,
 	*result = run_bw/1024/1024; /* MiB/s */
 }
 
+/*
+ * Resolvers for the summary rows.  edonr and skein have a single generic
+ * implementation each; the remaining algorithms dispatch at runtime.
+ */
+static const char *
+chksum_impl_generic(void)
+{
+	return ("generic");
+}
+
+static const char *
+chksum_impl_sha256(void)
+{
+	return (zfs_impl_get_ops("sha256")->get_effective_name());
+}
+
+static const char *
+chksum_impl_sha512(void)
+{
+	return (zfs_impl_get_ops("sha512")->get_effective_name());
+}
+
+static const char *
+chksum_impl_blake3(void)
+{
+	return (zfs_impl_get_ops("blake3")->get_effective_name());
+}
+
+static void
+chksum_summary(chksum_stat_t *cs, const char *name,
+    const char *(*used_impl)(void))
+{
+	cs->name = name;
+	cs->impl = "fastest";
+	cs->used_impl = used_impl;
+}
+
 static void
 chksum_benchit(chksum_stat_t *cs)
 {
@@ -250,13 +310,13 @@ chksum_benchmark(void)
 	if (chksum_stat_limit == AT_DONE)
 		return;
 
-	/* count implementations */
+	/* count implementations, plus one summary row per algorithm */
 	if (chksum_stat_limit == AT_STARTUP) {
-		chksum_stat_cnt = 1;  /* edonr */
-		chksum_stat_cnt += 1; /* skein */
-		chksum_stat_cnt += sha256->getcnt();
-		chksum_stat_cnt += sha512->getcnt();
-		chksum_stat_cnt += blake3->getcnt();
+		chksum_stat_cnt = 1 + 1;  /* edonr */
+		chksum_stat_cnt += 1 + 1; /* skein */
+		chksum_stat_cnt += sha256->getcnt() + 1;
+		chksum_stat_cnt += sha512->getcnt() + 1;
+		chksum_stat_cnt += blake3->getcnt() + 1;
 		chksum_stat_data = kmem_zalloc(
 		    sizeof (chksum_stat_t) * chksum_stat_cnt, KM_SLEEP);
 	}
@@ -271,6 +331,7 @@ chksum_benchmark(void)
 	cs->name = "edonr";
 	cs->impl = "generic";
 	chksum_benchit(cs);
+	chksum_summary(&chksum_stat_data[cbid++], "edonr", chksum_impl_generic);
 
 	/* skein */
 	cs = &chksum_stat_data[cbid++];
@@ -280,6 +341,7 @@ chksum_benchmark(void)
 	cs->name = "skein";
 	cs->impl = "generic";
 	chksum_benchit(cs);
+	chksum_summary(&chksum_stat_data[cbid++], "skein", chksum_impl_generic);
 
 	/* sha256 */
 	id_save = sha256->getid();
@@ -298,6 +360,7 @@ chksum_benchmark(void)
 		}
 	}
 	sha256->setid(id_save);
+	chksum_summary(&chksum_stat_data[cbid++], "sha256", chksum_impl_sha256);
 
 	/* sha512 */
 	id_save = sha512->getid();
@@ -316,6 +379,7 @@ chksum_benchmark(void)
 		}
 	}
 	sha512->setid(id_save);
+	chksum_summary(&chksum_stat_data[cbid++], "sha512", chksum_impl_sha512);
 
 	/* blake3 */
 	id_save = blake3->getid();
@@ -334,6 +398,9 @@ chksum_benchmark(void)
 		}
 	}
 	blake3->setid(id_save);
+	chksum_summary(&chksum_stat_data[cbid++], "blake3", chksum_impl_blake3);
+
+	ASSERT3U(cbid, ==, chksum_stat_cnt);
 
 	switch (chksum_stat_limit) {
 	case AT_STARTUP:
