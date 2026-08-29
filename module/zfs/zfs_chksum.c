@@ -35,22 +35,22 @@
 
 /* Block sizes to benchmark, and how many rounds to batch per timing loop */
 static const uint64_t chksum_bs[] = {
-	1<<10, 1<<12, 1<<14, 1<<16, 1<<18, 1<<20, 1<<22, 1<<24
+	1<<10, 1<<12, 1<<14, 1<<16, 1<<17, 1<<18, 1<<20, 1<<22, 1<<24
 };
 static const uint32_t chksum_bs_loops[] = {
-	128, 64, 32, 16, 8, 4, 1, 1
+	128, 64, 32, 16, 8, 8, 4, 1, 1
 };
 static const char *const chksum_bs_name[] = {
-	"1k", "4k", "16k", "64k", "256k", "1m", "4m", "16m"
+	"1k", "4k", "16k", "64k", "128k", "256k", "1m", "4m", "16m"
 };
 
 #define	CHKSUM_BS_CNT	ARRAY_SIZE(chksum_bs)
 
 /* Block sizes below this index use a linear abd, the rest a scattered one */
-#define	CHKSUM_BS_LINEAR	6
+#define	CHKSUM_BS_LINEAR	7
 
 /* Block size the implementation selection is based on */
-#define	CHKSUM_BS_SELECT	4
+#define	CHKSUM_BS_SELECT	5
 
 typedef enum {
 	CHKSUM_ROW_BENCH = 0,	/* timings of one algorithm+implementation */
@@ -124,7 +124,7 @@ static void chksum_benchmark(void);
  * implementation that a checksum computed right now would use - the benchmark
  * winner, unless the algorithm's module parameter pins a specific one.
  *
- * implementation   1k      4k     16k     64k    256k      1m      4m     16m
+ * implementation   1k      4k     16k     64k    128k    256k      1m     16m
  * edonr-generic  1278    1625    1769    1776    1783    1778    1771    1767
  * edonr-fastest         generic
  * skein-generic   548     594     613     623     621     623     621     486
