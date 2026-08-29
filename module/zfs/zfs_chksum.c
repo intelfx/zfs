@@ -233,7 +233,8 @@ chksum_kstat_data(char *buf, size_t size, void *data)
 	case CHKSUM_ROW_BENCH:
 		for (int i = 0; i < CHKSUM_BS_CNT; i++)
 			off += kmem_scnprintf(buf + off, size - off, "%*llu",
-			    CHKSUM_DATA_WIDTH, (u_longlong_t)cs->bs[i]);
+			    CHKSUM_DATA_WIDTH,
+			    (u_longlong_t)(cs->bs[i] >> 20)); /* MiB/s */
 		break;
 	}
 	(void) kmem_scnprintf(buf + off, size - off, "\n");
@@ -275,8 +276,7 @@ chksum_run(chksum_stat_t *cs, abd_t *abd, void *ctx, int round)
 	kpreempt_enable();
 
 	run_bw = size * run_count * NANOSEC;
-	run_bw /= run_time_ns; /* B/s */
-	cs->bs[round] = run_bw/1024/1024; /* MiB/s */
+	cs->bs[round] = run_bw / run_time_ns; /* B/s */
 }
 
 /*
