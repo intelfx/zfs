@@ -417,6 +417,42 @@ fletcher_4_impl_set(const char *val)
 }
 
 /*
+ * Enumeration of the supported implementations.  Indexes are into
+ * fletcher_4_supp_impls[] and stay stable for the lifetime of the module.
+ */
+uint32_t
+fletcher_4_impl_getcnt(void)
+{
+	fletcher_4_impl_init();
+	return (fletcher_4_supp_impls_cnt);
+}
+
+const char *
+fletcher_4_impl_getname(uint32_t id)
+{
+	fletcher_4_impl_init();
+	ASSERT3U(id, <, fletcher_4_supp_impls_cnt);
+	return (fletcher_4_supp_impls[id]->name);
+}
+
+uint32_t
+fletcher_4_impl_getid(void)
+{
+	return (IMPL_READ(fletcher_4_impl_chosen));
+}
+
+void
+fletcher_4_impl_setid(uint32_t id)
+{
+	fletcher_4_impl_init();
+	ASSERT(id == IMPL_FASTEST || id == IMPL_CYCLE ||
+	    id < fletcher_4_supp_impls_cnt);
+
+	atomic_swap_32(&fletcher_4_impl_chosen, id);
+	membar_producer();
+}
+
+/*
  * Name of the implementation that would be used for a checksum computed now,
  * i.e. with the "fastest" selector resolved to the benchmark winner.
  */

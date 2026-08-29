@@ -69,9 +69,13 @@ _ZFS_FLETCHER_H void fletcher_4_init(void);
 _ZFS_FLETCHER_H void fletcher_4_fini(void);
 
 /*
- * Name of the fletcher4 implementation currently in effect.  Deliberately not
- * part of the libzfs ABI, hence no visibility annotation.
+ * Implementation enumeration and the implementation currently in effect.
+ * Deliberately not part of the libzfs ABI, hence no visibility annotation.
  */
+extern uint32_t fletcher_4_impl_getcnt(void);
+extern const char *fletcher_4_impl_getname(uint32_t id);
+extern uint32_t fletcher_4_impl_getid(void);
+extern void fletcher_4_impl_setid(uint32_t id);
 extern const char *fletcher_4_impl_get_effective_name(boolean_t byteswap);
 
 
