@@ -216,6 +216,10 @@ static struct fletcher_4_impl_selector {
 	{ "scalar",	IMPL_SCALAR }
 };
 
+/* Indexes into fletcher_4_supp_impls[] of the fastest implementations */
+static uint32_t fletcher_4_fastest_native = 0;
+static uint32_t fletcher_4_fastest_byteswap = 0;
+
 #if defined(_KERNEL)
 static kstat_t *fletcher_4_kstat;
 
@@ -409,6 +413,30 @@ fletcher_4_impl_set(const char *val)
 	}
 
 	return (err);
+}
+
+/*
+ * Name of the implementation that would be used for a checksum computed now,
+ * i.e. with the "fastest" selector resolved to the benchmark winner.
+ */
+const char *
+fletcher_4_impl_get_effective_name(boolean_t byteswap)
+{
+	uint32_t impl = IMPL_READ(fletcher_4_impl_chosen);
+
+	if (!kfpu_allowed())
+		return (fletcher_4_superscalar4_ops.name);
+
+	switch (impl) {
+	case IMPL_FASTEST:
+		impl = byteswap ? fletcher_4_fastest_byteswap :
+		    fletcher_4_fastest_native;
+		break;
+	case IMPL_CYCLE:
+		return ("cycle");
+	}
+
+	return (fletcher_4_supp_impls[impl]->name);
 }
 
 /*
@@ -639,9 +667,9 @@ fletcher_4_kstat_data(char *buf, size_t size, void *data)
 	if (curr_stat == fastest_stat) {
 		off += snprintf(buf + off, size - off, "%-17s", "fastest");
 		off += snprintf(buf + off, size - off, "%-15s",
-		    fletcher_4_supp_impls[fastest_stat->native]->name);
+		    fletcher_4_impl_get_effective_name(B_FALSE));
 		(void) snprintf(buf + off, size - off, "%-15s\n",
-		    fletcher_4_supp_impls[fastest_stat->byteswap]->name);
+		    fletcher_4_impl_get_effective_name(B_TRUE));
 	} else {
 		ptrdiff_t id = curr_stat - fletcher_4_stat_data;
 
@@ -686,8 +714,6 @@ static void
 fletcher_4_benchmark_impl(boolean_t native, char *data, uint64_t data_size)
 {
 
-	struct fletcher_4_kstat *fastest_stat =
-	    &fletcher_4_stat_data[fletcher_4_supp_impls_cnt];
 	hrtime_t start;
 	uint64_t run_bw, run_time_ns, best_run = 0;
 	zio_cksum_t zc;
@@ -725,11 +751,11 @@ fletcher_4_benchmark_impl(boolean_t native, char *data, uint64_t data_size)
 			best_run = run_bw;
 
 			if (native) {
-				fastest_stat->native = i;
+				fletcher_4_fastest_native = i;
 				FLETCHER_4_FASTEST_FN_COPY(native,
 				    fletcher_4_supp_impls[i]);
 			} else {
-				fastest_stat->byteswap = i;
+				fletcher_4_fastest_byteswap = i;
 				FLETCHER_4_FASTEST_FN_COPY(byteswap,
 				    fletcher_4_supp_impls[i]);
 			}
@@ -777,8 +803,10 @@ fletcher_4_benchmark(void)
 	 * consumers (zdb, zhack, zinject, ztest).  The last implementation
 	 * is assumed to be the fastest and used by default.
 	 */
+	fletcher_4_fastest_native = fletcher_4_supp_impls_cnt - 1;
+	fletcher_4_fastest_byteswap = fletcher_4_supp_impls_cnt - 1;
 	memcpy(&fletcher_4_fastest_impl,
-	    fletcher_4_supp_impls[fletcher_4_supp_impls_cnt - 1],
+	    fletcher_4_supp_impls[fletcher_4_fastest_native],
 	    sizeof (fletcher_4_fastest_impl));
 	fletcher_4_fastest_impl.name = "fastest";
 	membar_producer();

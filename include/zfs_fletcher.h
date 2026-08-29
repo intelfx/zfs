@@ -68,6 +68,12 @@ _ZFS_FLETCHER_H int fletcher_4_impl_set(const char *selector);
 _ZFS_FLETCHER_H void fletcher_4_init(void);
 _ZFS_FLETCHER_H void fletcher_4_fini(void);
 
+/*
+ * Name of the fletcher4 implementation currently in effect.  Deliberately not
+ * part of the libzfs ABI, hence no visibility annotation.
+ */
+extern const char *fletcher_4_impl_get_effective_name(boolean_t byteswap);
+
 
 
 /* Internal fletcher ctx */
