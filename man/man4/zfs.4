@@ -1469,6 +1469,12 @@ benchmark results by reading this kstat file:
 Each algorithm listed there is followed by a
 .Sy fastest
 row naming the implementation that is actually in use.
+The two closing
+.Sy best-overall
+and
+.Sy best-dedup
+rows name the fastest algorithm at each block size, over all algorithms and
+over those usable as a dedup checksum on their own, respectively.
 .
 .It Sy zfs_free_bpobj_enabled Ns = Ns Sy 1 Ns | Ns 0 Pq int
 Enable/disable the processing of the free_bpobj object.

@@ -52,7 +52,14 @@ static const char *const chksum_bs_name[] = {
 /* Block size the implementation selection is based on */
 #define	CHKSUM_BS_SELECT	4
 
+typedef enum {
+	CHKSUM_ROW_BENCH = 0,	/* timings of one algorithm+implementation */
+	CHKSUM_ROW_IMPL,	/* implementation in use for one algorithm */
+	CHKSUM_ROW_BEST,	/* fastest algorithm per block size */
+} chksum_row_t;
+
 typedef struct {
+	chksum_row_t row;
 	const char *name;
 	const char *impl;
 	uint64_t bs[CHKSUM_BS_CNT];
@@ -62,11 +69,20 @@ typedef struct {
 	zio_checksum_tmpl_free_t *(free);
 
 	/*
-	 * Only set on the summary row of an algorithm.  Such a row carries no
-	 * timings; instead it names the implementation that would be used for
-	 * a checksum computed right now.
+	 * CHKSUM_ROW_BENCH: the checksum= value this row measures, or
+	 * ZIO_CHECKSUM_INHERIT if the row is not selectable as one - which is
+	 * the case for the byteswapping direction of fletcher4.
+	 */
+	enum zio_checksum ck;
+
+	/*
+	 * CHKSUM_ROW_IMPL: names the implementation that would be used for a
+	 * checksum computed right now.
 	 */
 	const char *(*used_impl)(void);
+
+	/* CHKSUM_ROW_BEST: only compare dedup-capable algorithms */
+	boolean_t dedup_only;
 } chksum_stat_t;
 
 /*
@@ -75,6 +91,12 @@ typedef struct {
  * truncated to keep the columns aligned.
  */
 #define	CHKSUM_IMPL_WIDTH	34
+
+/*
+ * Width of the per-block-size columns.  Sized for "fletcher4" in the summary
+ * rows, which is longer than any throughput figure we expect.
+ */
+#define	CHKSUM_DATA_WIDTH	10
 
 #define	AT_STARTUP	0
 #define	AT_BENCHMARK	1
@@ -90,6 +112,11 @@ static void chksum_benchmark(void);
  * fletcher4 is reported twice, as "fletcher4" for the native and
  * "fletcher4_byteswap" for the byteswapping direction, since ZFS picks an
  * implementation for each of them separately.
+ *
+ * The last two rows answer which "-o checksum=" is cheapest at a given block
+ * size: "best-overall" over all algorithms, "best-dedup" over those usable as
+ * a dedup checksum on their own.  Note that edonr is absent from the latter
+ * because it is only accepted as "dedup=edonr,verify".
  *
  * Sample output on i3-1005G1 System, fletcher4 rows elided.  Every algorithm
  * is followed by a
@@ -120,6 +147,7 @@ static void chksum_benchmark(void);
  * blake3-avx2     452    2013    3225    3351    3356    3261    3076    3101
  * blake3-avx512   498    2869    5269    5926    5872    5643    5014    5005
  * blake3-fastest         avx512
+ * best-dedup             sha256  blake3  blake3  blake3  blake3  blake3  blake3
  */
 static int
 chksum_kstat_headers(char *buf, size_t size)
@@ -129,11 +157,46 @@ chksum_kstat_headers(char *buf, size_t size)
 	off += kmem_scnprintf(buf + off, size, "%-*s", CHKSUM_IMPL_WIDTH,
 	    "implementation");
 	for (int i = 0; i < CHKSUM_BS_CNT; i++)
-		off += kmem_scnprintf(buf + off, size - off, "%8s",
-		    chksum_bs_name[i]);
+		off += kmem_scnprintf(buf + off, size - off, "%*s",
+		    CHKSUM_DATA_WIDTH, chksum_bs_name[i]);
 	(void) kmem_scnprintf(buf + off, size - off, "\n");
 
 	return (0);
+}
+
+/*
+ * Fastest algorithm at each block size, taken over the fastest implementation
+ * of each one.  Answers which "-o checksum=" performs best on this machine.
+ */
+static ssize_t
+chksum_kstat_best(char *buf, size_t size, boolean_t dedup_only)
+{
+	ssize_t off = 0;
+
+	for (int i = 0; i < CHKSUM_BS_CNT; i++) {
+		const char *best = "-";
+		uint64_t max = 0;
+
+		for (int n = 0; n < chksum_stat_cnt; n++) {
+			const chksum_stat_t *cs = &chksum_stat_data[n];
+
+			if (cs->row != CHKSUM_ROW_BENCH ||
+			    cs->ck == ZIO_CHECKSUM_INHERIT)
+				continue;
+			if (dedup_only && !(zio_checksum_table[cs->ck].ci_flags
+			    & ZCHECKSUM_FLAG_DEDUP))
+				continue;
+			if (cs->bs[i] > max) {
+				max = cs->bs[i];
+				best = cs->name;
+			}
+		}
+
+		off += kmem_scnprintf(buf + off, size - off, "%*s",
+		    CHKSUM_DATA_WIDTH, best);
+	}
+
+	return (off);
 }
 
 static int
@@ -148,14 +211,20 @@ chksum_kstat_data(char *buf, size_t size, void *data)
 	off += kmem_scnprintf(buf + off, size - off, "%-*s",
 	    CHKSUM_IMPL_WIDTH, b);
 
-	/* summary row: name the implementation in use instead of timings */
-	if (cs->used_impl != NULL) {
-		off += kmem_scnprintf(buf + off, size - off, "%8s",
-		    cs->used_impl());
-	} else {
+	switch (cs->row) {
+	case CHKSUM_ROW_IMPL:
+		off += kmem_scnprintf(buf + off, size - off, "%*s",
+		    CHKSUM_DATA_WIDTH, cs->used_impl());
+		break;
+	case CHKSUM_ROW_BEST:
+		off += chksum_kstat_best(buf + off, size - off,
+		    cs->dedup_only);
+		break;
+	case CHKSUM_ROW_BENCH:
 		for (int i = 0; i < CHKSUM_BS_CNT; i++)
-			off += kmem_scnprintf(buf + off, size - off, "%8llu",
-			    (u_longlong_t)cs->bs[i]);
+			off += kmem_scnprintf(buf + off, size - off, "%*llu",
+			    CHKSUM_DATA_WIDTH, (u_longlong_t)cs->bs[i]);
+		break;
 	}
 	(void) kmem_scnprintf(buf + off, size - off, "\n");
 
@@ -244,9 +313,19 @@ static void
 chksum_summary(chksum_stat_t *cs, const char *name,
     const char *(*used_impl)(void))
 {
+	cs->row = CHKSUM_ROW_IMPL;
 	cs->name = name;
 	cs->impl = "fastest";
 	cs->used_impl = used_impl;
+}
+
+static void
+chksum_best(chksum_stat_t *cs, const char *impl, boolean_t dedup_only)
+{
+	cs->row = CHKSUM_ROW_BEST;
+	cs->name = "best";
+	cs->impl = impl;
+	cs->dedup_only = dedup_only;
 }
 
 static void
@@ -318,6 +397,8 @@ chksum_benchmark(void)
 		chksum_stat_cnt += blake3->getcnt() + 1;
 		/* fletcher4 is measured natively and byteswapping */
 		chksum_stat_cnt += 2 * (fletcher_4_impl_getcnt() + 1);
+		/* fastest algorithm overall, and among dedup-capable ones */
+		chksum_stat_cnt += 2;
 		chksum_stat_data = kmem_zalloc(
 		    sizeof (chksum_stat_t) * chksum_stat_cnt, KM_SLEEP);
 	}
@@ -331,6 +412,7 @@ chksum_benchmark(void)
 	cs->free = abd_checksum_edonr_tmpl_free;
 	cs->name = "edonr";
 	cs->impl = "generic";
+	cs->ck = ZIO_CHECKSUM_EDONR;
 	chksum_benchit(cs);
 	chksum_summary(&chksum_stat_data[cbid++], "edonr", chksum_impl_generic);
 
@@ -341,6 +423,7 @@ chksum_benchmark(void)
 	cs->free = abd_checksum_skein_tmpl_free;
 	cs->name = "skein";
 	cs->impl = "generic";
+	cs->ck = ZIO_CHECKSUM_SKEIN;
 	chksum_benchit(cs);
 	chksum_summary(&chksum_stat_data[cbid++], "skein", chksum_impl_generic);
 
@@ -354,6 +437,7 @@ chksum_benchmark(void)
 		cs->free = 0;
 		cs->name = sha256->name;
 		cs->impl = sha256->getname();
+		cs->ck = ZIO_CHECKSUM_SHA256;
 		chksum_benchit(cs);
 		if (cs->bs[CHKSUM_BS_SELECT] > max) {
 			max = cs->bs[CHKSUM_BS_SELECT];
@@ -373,6 +457,7 @@ chksum_benchmark(void)
 		cs->free = 0;
 		cs->name = sha512->name;
 		cs->impl = sha512->getname();
+		cs->ck = ZIO_CHECKSUM_SHA512;
 		chksum_benchit(cs);
 		if (cs->bs[CHKSUM_BS_SELECT] > max) {
 			max = cs->bs[CHKSUM_BS_SELECT];
@@ -392,6 +477,7 @@ chksum_benchmark(void)
 		cs->free = abd_checksum_blake3_tmpl_free;
 		cs->name = blake3->name;
 		cs->impl = blake3->getname();
+		cs->ck = ZIO_CHECKSUM_BLAKE3;
 		chksum_benchit(cs);
 		if (cs->bs[CHKSUM_BS_SELECT] > max) {
 			max = cs->bs[CHKSUM_BS_SELECT];
@@ -415,6 +501,7 @@ chksum_benchmark(void)
 		cs->free = 0;
 		cs->name = "fletcher4";
 		cs->impl = fletcher_4_impl_getname(id);
+		cs->ck = ZIO_CHECKSUM_FLETCHER_4;
 		if (chksum_stat_limit != AT_STARTUP) {
 			fletcher_4_impl_setid(id);
 			chksum_benchit(cs);
@@ -438,6 +525,14 @@ chksum_benchmark(void)
 	chksum_summary(&chksum_stat_data[cbid++], "fletcher4_byteswap",
 	    chksum_impl_fletcher_4_byteswap);
 	fletcher_4_impl_setid(id_save);
+
+	/*
+	 * Fastest algorithm per block size.  The byteswapping rows are left
+	 * out of the comparison: their checksum= value is the same fletcher4,
+	 * the direction is dictated by the pool's endianness.
+	 */
+	chksum_best(&chksum_stat_data[cbid++], "overall", B_FALSE);
+	chksum_best(&chksum_stat_data[cbid++], "dedup", B_TRUE);
 
 	ASSERT3U(cbid, ==, chksum_stat_cnt);
 
