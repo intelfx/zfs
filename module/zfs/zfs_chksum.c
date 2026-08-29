@@ -33,17 +33,29 @@
 #include <sys/sha2.h>
 #include <zfs_fletcher.h>
 
+/* Block sizes to benchmark, and how many rounds to batch per timing loop */
+static const uint64_t chksum_bs[] = {
+	1<<10, 1<<12, 1<<14, 1<<16, 1<<18, 1<<20, 1<<22, 1<<24
+};
+static const uint32_t chksum_bs_loops[] = {
+	128, 64, 32, 16, 8, 4, 1, 1
+};
+static const char *const chksum_bs_name[] = {
+	"1k", "4k", "16k", "64k", "256k", "1m", "4m", "16m"
+};
+
+#define	CHKSUM_BS_CNT	ARRAY_SIZE(chksum_bs)
+
+/* Block sizes below this index use a linear abd, the rest a scattered one */
+#define	CHKSUM_BS_LINEAR	6
+
+/* Block size the implementation selection is based on */
+#define	CHKSUM_BS_SELECT	4
+
 typedef struct {
 	const char *name;
 	const char *impl;
-	uint64_t bs1k;
-	uint64_t bs4k;
-	uint64_t bs16k;
-	uint64_t bs64k;
-	uint64_t bs256k;
-	uint64_t bs1m;
-	uint64_t bs4m;
-	uint64_t bs16m;
+	uint64_t bs[CHKSUM_BS_CNT];
 	zio_cksum_salt_t salt;
 	zio_checksum_t *(func);
 	zio_checksum_tmpl_init_t *(init);
@@ -116,14 +128,10 @@ chksum_kstat_headers(char *buf, size_t size)
 
 	off += kmem_scnprintf(buf + off, size, "%-*s", CHKSUM_IMPL_WIDTH,
 	    "implementation");
-	off += kmem_scnprintf(buf + off, size - off, "%8s", "1k");
-	off += kmem_scnprintf(buf + off, size - off, "%8s", "4k");
-	off += kmem_scnprintf(buf + off, size - off, "%8s", "16k");
-	off += kmem_scnprintf(buf + off, size - off, "%8s", "64k");
-	off += kmem_scnprintf(buf + off, size - off, "%8s", "256k");
-	off += kmem_scnprintf(buf + off, size - off, "%8s", "1m");
-	off += kmem_scnprintf(buf + off, size - off, "%8s", "4m");
-	(void) kmem_scnprintf(buf + off, size - off, "%8s\n", "16m");
+	for (int i = 0; i < CHKSUM_BS_CNT; i++)
+		off += kmem_scnprintf(buf + off, size - off, "%8s",
+		    chksum_bs_name[i]);
+	(void) kmem_scnprintf(buf + off, size - off, "\n");
 
 	return (0);
 }
@@ -142,27 +150,14 @@ chksum_kstat_data(char *buf, size_t size, void *data)
 
 	/* summary row: name the implementation in use instead of timings */
 	if (cs->used_impl != NULL) {
-		(void) kmem_scnprintf(buf + off, size - off, "%8s\n",
+		off += kmem_scnprintf(buf + off, size - off, "%8s",
 		    cs->used_impl());
-		return (0);
+	} else {
+		for (int i = 0; i < CHKSUM_BS_CNT; i++)
+			off += kmem_scnprintf(buf + off, size - off, "%8llu",
+			    (u_longlong_t)cs->bs[i]);
 	}
-
-	off += kmem_scnprintf(buf + off, size - off, "%8llu",
-	    (u_longlong_t)cs->bs1k);
-	off += kmem_scnprintf(buf + off, size - off, "%8llu",
-	    (u_longlong_t)cs->bs4k);
-	off += kmem_scnprintf(buf + off, size - off, "%8llu",
-	    (u_longlong_t)cs->bs16k);
-	off += kmem_scnprintf(buf + off, size - off, "%8llu",
-	    (u_longlong_t)cs->bs64k);
-	off += kmem_scnprintf(buf + off, size - off, "%8llu",
-	    (u_longlong_t)cs->bs256k);
-	off += kmem_scnprintf(buf + off, size - off, "%8llu",
-	    (u_longlong_t)cs->bs1m);
-	off += kmem_scnprintf(buf + off, size - off, "%8llu",
-	    (u_longlong_t)cs->bs4m);
-	(void) kmem_scnprintf(buf + off, size - off, "%8llu\n",
-	    (u_longlong_t)cs->bs16m);
+	(void) kmem_scnprintf(buf + off, size - off, "\n");
 
 	return (0);
 }
@@ -182,32 +177,13 @@ chksum_kstat_addr(kstat_t *ksp, loff_t n)
 }
 
 static void
-chksum_run(chksum_stat_t *cs, abd_t *abd, void *ctx, int round,
-    uint64_t *result)
+chksum_run(chksum_stat_t *cs, abd_t *abd, void *ctx, int round)
 {
 	hrtime_t start;
-	uint64_t run_bw, run_time_ns, run_count = 0, size = 0;
-	uint32_t l, loops = 0;
+	uint64_t run_bw, run_time_ns, run_count = 0;
+	uint64_t size = chksum_bs[round];
+	uint32_t l, loops = chksum_bs_loops[round];
 	zio_cksum_t zcp;
-
-	switch (round) {
-	case 1: /* 1k */
-		size = 1<<10; loops = 128; break;
-	case 2: /* 4k */
-		size = 1<<12; loops = 64; break;
-	case 3: /* 16k */
-		size = 1<<14; loops = 32; break;
-	case 4: /* 64k */
-		size = 1<<16; loops = 16; break;
-	case 5: /* 256k */
-		size = 1<<18; loops = 8; break;
-	case 6: /* 1m */
-		size = 1<<20; loops = 4; break;
-	case 7: /* 4m */
-		size = 1<<22; loops = 1; break;
-	case 8: /* 16m */
-		size = 1<<24; loops = 1; break;
-	}
 
 	kpreempt_disable();
 	start = gethrtime();
@@ -221,7 +197,7 @@ chksum_run(chksum_stat_t *cs, abd_t *abd, void *ctx, int round,
 
 	run_bw = size * run_count * NANOSEC;
 	run_bw /= run_time_ns; /* B/s */
-	*result = run_bw/1024/1024; /* MiB/s */
+	cs->bs[round] = run_bw/1024/1024; /* MiB/s */
 }
 
 /*
@@ -286,27 +262,23 @@ chksum_benchit(chksum_stat_t *cs)
 
 	/* benchmarks in startup mode */
 	if (chksum_stat_limit == AT_STARTUP) {
-		abd = abd_alloc_linear(1<<18, B_FALSE);
-		chksum_run(cs, abd, ctx, 5, &cs->bs256k);
+		abd = abd_alloc_linear(chksum_bs[CHKSUM_BS_SELECT], B_FALSE);
+		chksum_run(cs, abd, ctx, CHKSUM_BS_SELECT);
 		goto done;
 	}
 
 	/* allocate test memory via abd linear interface */
-	abd = abd_alloc_linear(1<<20, B_FALSE);
+	abd = abd_alloc_linear(chksum_bs[CHKSUM_BS_LINEAR - 1], B_FALSE);
 
 	/* benchmarks when requested */
-	chksum_run(cs, abd, ctx, 1, &cs->bs1k);
-	chksum_run(cs, abd, ctx, 2, &cs->bs4k);
-	chksum_run(cs, abd, ctx, 3, &cs->bs16k);
-	chksum_run(cs, abd, ctx, 4, &cs->bs64k);
-	chksum_run(cs, abd, ctx, 5, &cs->bs256k);
-	chksum_run(cs, abd, ctx, 6, &cs->bs1m);
+	for (int i = 0; i < CHKSUM_BS_LINEAR; i++)
+		chksum_run(cs, abd, ctx, i);
 	abd_free(abd);
 
 	/* allocate test memory via abd non linear interface */
-	abd = abd_alloc(1<<24, B_FALSE);
-	chksum_run(cs, abd, ctx, 7, &cs->bs4m);
-	chksum_run(cs, abd, ctx, 8, &cs->bs16m);
+	abd = abd_alloc(chksum_bs[CHKSUM_BS_CNT - 1], B_FALSE);
+	for (int i = CHKSUM_BS_LINEAR; i < CHKSUM_BS_CNT; i++)
+		chksum_run(cs, abd, ctx, i);
 
 done:
 	abd_free(abd);
@@ -383,8 +355,8 @@ chksum_benchmark(void)
 		cs->name = sha256->name;
 		cs->impl = sha256->getname();
 		chksum_benchit(cs);
-		if (cs->bs256k > max) {
-			max = cs->bs256k;
+		if (cs->bs[CHKSUM_BS_SELECT] > max) {
+			max = cs->bs[CHKSUM_BS_SELECT];
 			sha256->set_fastest(id);
 		}
 	}
@@ -402,8 +374,8 @@ chksum_benchmark(void)
 		cs->name = sha512->name;
 		cs->impl = sha512->getname();
 		chksum_benchit(cs);
-		if (cs->bs256k > max) {
-			max = cs->bs256k;
+		if (cs->bs[CHKSUM_BS_SELECT] > max) {
+			max = cs->bs[CHKSUM_BS_SELECT];
 			sha512->set_fastest(id);
 		}
 	}
@@ -421,8 +393,8 @@ chksum_benchmark(void)
 		cs->name = blake3->name;
 		cs->impl = blake3->getname();
 		chksum_benchit(cs);
-		if (cs->bs256k > max) {
-			max = cs->bs256k;
+		if (cs->bs[CHKSUM_BS_SELECT] > max) {
+			max = cs->bs[CHKSUM_BS_SELECT];
 			blake3->set_fastest(id);
 		}
 	}
