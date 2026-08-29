@@ -92,10 +92,10 @@ typedef struct {
 
 /*
  * Width of the implementation column.  The longest "<algorithm>-<impl>" pair
- * currently emitted is "fletcher4_byteswap-superscalar4"; longer ones are
+ * currently emitted is "fletcher4_bswap-superscalar4"; longer ones are
  * truncated to keep the columns aligned.
  */
-#define	CHKSUM_IMPL_WIDTH	34
+#define	CHKSUM_IMPL_WIDTH	29
 
 /*
  * Width of the per-block-size columns.  Sized for "fletcher4" in the summary
@@ -116,7 +116,7 @@ static void chksum_benchmark(void);
 /*
  * Throughput in MiB/s per block size, one row per algorithm and
  * implementation.  fletcher4 is reported twice, as "fletcher4" for the native
- * and "fletcher4_byteswap" for the byteswapping direction, since ZFS picks an
+ * and "fletcher4_bswap" for the byteswapping direction, since ZFS picks an
  * implementation for each of them separately.  Everything else is tracked per
  * algorithm only - there is no per-block-size implementation choice, the
  * 128k column decides for all of them.
@@ -134,30 +134,30 @@ static void chksum_benchmark(void);
  * Sample output on an i3-1005G1 system, with the fletcher4 rows and most
  * columns elided - "best-overall" too, since it depends on the former:
  *
- * implementation                            1k        4k      256k       16m
- * edonr-generic                           1278      1625      1783      1767
- * edonr-fastest                        generic
- * skein-generic                            548       594       621       486
- * skein-fastest                        generic
- * sha256-generic                           255       270       279       283
- * sha256-x64                               288       310       318       316
- * sha256-ssse3                             304       342       356       356
- * sha256-avx                               311       348       362       362
- * sha256-avx2                              330       378       395       395
- * sha256-shani                             908      1127      1233      1230
- * sha256-fastest                         shani
- * sha512-generic                           359       409       429       423
- * sha512-x64                               420       473       497       495
- * sha512-avx                               406       522       560       560
- * sha512-avx2                              464       568       609       608
- * sha512-fastest                          avx2
- * blake3-generic                           330       327       324       322
- * blake3-sse2                              424      1366      1458      1408
- * blake3-sse41                             453      1554      1689      1630
- * blake3-avx2                              452      2013      3356      3101
- * blake3-avx512                            498      2869      5872      5005
- * blake3-fastest                        avx512
- * best-dedup                            sha256    blake3    blake3    blake3
+ * implementation                       1k        4k      256k       16m
+ * edonr-generic                      1278      1625      1783      1767
+ * edonr-fastest                   generic
+ * skein-generic                       548       594       621       486
+ * skein-fastest                   generic
+ * sha256-generic                      255       270       279       283
+ * sha256-x64                          288       310       318       316
+ * sha256-ssse3                        304       342       356       356
+ * sha256-avx                          311       348       362       362
+ * sha256-avx2                         330       378       395       395
+ * sha256-shani                        908      1127      1233      1230
+ * sha256-fastest                    shani
+ * sha512-generic                      359       409       429       423
+ * sha512-x64                          420       473       497       495
+ * sha512-avx                          406       522       560       560
+ * sha512-avx2                         464       568       609       608
+ * sha512-fastest                     avx2
+ * blake3-generic                      330       327       324       322
+ * blake3-sse2                         424      1366      1458      1408
+ * blake3-sse41                        453      1554      1689      1630
+ * blake3-avx2                         452      2013      3356      3101
+ * blake3-avx512                       498      2869      5872      5005
+ * blake3-fastest                   avx512
+ * best-dedup                       sha256    blake3    blake3    blake3
  */
 static int
 chksum_kstat_headers(char *buf, size_t size)
@@ -525,14 +525,14 @@ chksum_benchmark(void)
 		cs->init = 0;
 		cs->func = abd_fletcher_4_byteswap;
 		cs->free = 0;
-		cs->name = "fletcher4_byteswap";
+		cs->name = "fletcher4_bswap";
 		cs->impl = fletcher_4_impl_getname(id);
 		if (chksum_stat_limit != AT_STARTUP) {
 			fletcher_4_impl_setid(id);
 			chksum_benchit(cs);
 		}
 	}
-	chksum_summary(&chksum_stat_data[cbid++], "fletcher4_byteswap",
+	chksum_summary(&chksum_stat_data[cbid++], "fletcher4_bswap",
 	    chksum_impl_fletcher_4_byteswap);
 	fletcher_4_impl_setid(id_save);
 
