@@ -1424,6 +1424,11 @@ and will only appear if ZFS detects that they are present at runtime.
 If multiple implementations of fletcher 4 are available, the
 .Sy fastest
 will be chosen using a micro benchmark.
+You can see the benchmark results by reading these kstat files:
+.Pa /proc/spl/kstat/zfs/fletcher_4_bench
+and
+.Pa /proc/spl/kstat/zfs/chksum_bench ,
+the latter also allowing comparison against the other checksum algorithms.
 Selecting
 .Sy scalar
 results in the original CPU-based calculation being used.

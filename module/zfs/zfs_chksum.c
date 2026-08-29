@@ -31,6 +31,7 @@
 
 #include <sys/blake3.h>
 #include <sys/sha2.h>
+#include <zfs_fletcher.h>
 
 typedef struct {
 	const char *name;
@@ -56,6 +57,13 @@ typedef struct {
 	const char *(*used_impl)(void);
 } chksum_stat_t;
 
+/*
+ * Width of the implementation column.  The longest "<algorithm>-<impl>" pair
+ * currently emitted is "fletcher4_byteswap-superscalar4"; longer ones are
+ * truncated to keep the columns aligned.
+ */
+#define	CHKSUM_IMPL_WIDTH	34
+
 #define	AT_STARTUP	0
 #define	AT_BENCHMARK	1
 #define	AT_DONE		2
@@ -67,7 +75,12 @@ static int chksum_stat_cnt = 0;
 static void chksum_benchmark(void);
 
 /*
- * Sample output on i3-1005G1 System.  Every algorithm is followed by a
+ * fletcher4 is reported twice, as "fletcher4" for the native and
+ * "fletcher4_byteswap" for the byteswapping direction, since ZFS picks an
+ * implementation for each of them separately.
+ *
+ * Sample output on i3-1005G1 System, fletcher4 rows elided.  Every algorithm
+ * is followed by a
  * "-fastest" row, which carries no timings and instead names the
  * implementation that a checksum computed right now would use - the benchmark
  * winner, unless the algorithm's module parameter pins a specific one.
@@ -101,7 +114,8 @@ chksum_kstat_headers(char *buf, size_t size)
 {
 	ssize_t off = 0;
 
-	off += kmem_scnprintf(buf + off, size, "%-23s", "implementation");
+	off += kmem_scnprintf(buf + off, size, "%-*s", CHKSUM_IMPL_WIDTH,
+	    "implementation");
 	off += kmem_scnprintf(buf + off, size - off, "%8s", "1k");
 	off += kmem_scnprintf(buf + off, size - off, "%8s", "4k");
 	off += kmem_scnprintf(buf + off, size - off, "%8s", "16k");
@@ -119,11 +133,12 @@ chksum_kstat_data(char *buf, size_t size, void *data)
 {
 	chksum_stat_t *cs;
 	ssize_t off = 0;
-	char b[24];
+	char b[CHKSUM_IMPL_WIDTH + 1];
 
 	cs = (chksum_stat_t *)data;
-	kmem_scnprintf(b, 23, "%s-%s", cs->name, cs->impl);
-	off += kmem_scnprintf(buf + off, size - off, "%-23s", b);
+	kmem_scnprintf(b, CHKSUM_IMPL_WIDTH, "%s-%s", cs->name, cs->impl);
+	off += kmem_scnprintf(buf + off, size - off, "%-*s",
+	    CHKSUM_IMPL_WIDTH, b);
 
 	/* summary row: name the implementation in use instead of timings */
 	if (cs->used_impl != NULL) {
@@ -237,6 +252,18 @@ chksum_impl_blake3(void)
 	return (zfs_impl_get_ops("blake3")->get_effective_name());
 }
 
+static const char *
+chksum_impl_fletcher_4_native(void)
+{
+	return (fletcher_4_impl_get_effective_name(B_FALSE));
+}
+
+static const char *
+chksum_impl_fletcher_4_byteswap(void)
+{
+	return (fletcher_4_impl_get_effective_name(B_TRUE));
+}
+
 static void
 chksum_summary(chksum_stat_t *cs, const char *name,
     const char *(*used_impl)(void))
@@ -317,6 +344,8 @@ chksum_benchmark(void)
 		chksum_stat_cnt += sha256->getcnt() + 1;
 		chksum_stat_cnt += sha512->getcnt() + 1;
 		chksum_stat_cnt += blake3->getcnt() + 1;
+		/* fletcher4 is measured natively and byteswapping */
+		chksum_stat_cnt += 2 * (fletcher_4_impl_getcnt() + 1);
 		chksum_stat_data = kmem_zalloc(
 		    sizeof (chksum_stat_t) * chksum_stat_cnt, KM_SLEEP);
 	}
@@ -399,6 +428,44 @@ chksum_benchmark(void)
 	}
 	blake3->setid(id_save);
 	chksum_summary(&chksum_stat_data[cbid++], "blake3", chksum_impl_blake3);
+
+	/*
+	 * fletcher4.  Unlike the algorithms above, the implementation actually
+	 * used is picked by fletcher_4_init(), which runs its own benchmark;
+	 * we only measure and report here.  The startup pass exists solely to
+	 * select implementations, so skip it.
+	 */
+	id_save = fletcher_4_impl_getid();
+	for (id = 0; id < fletcher_4_impl_getcnt(); id++) {
+		cs = &chksum_stat_data[cbid++];
+		cs->init = 0;
+		cs->func = abd_fletcher_4_native;
+		cs->free = 0;
+		cs->name = "fletcher4";
+		cs->impl = fletcher_4_impl_getname(id);
+		if (chksum_stat_limit != AT_STARTUP) {
+			fletcher_4_impl_setid(id);
+			chksum_benchit(cs);
+		}
+	}
+	chksum_summary(&chksum_stat_data[cbid++], "fletcher4",
+	    chksum_impl_fletcher_4_native);
+
+	for (id = 0; id < fletcher_4_impl_getcnt(); id++) {
+		cs = &chksum_stat_data[cbid++];
+		cs->init = 0;
+		cs->func = abd_fletcher_4_byteswap;
+		cs->free = 0;
+		cs->name = "fletcher4_byteswap";
+		cs->impl = fletcher_4_impl_getname(id);
+		if (chksum_stat_limit != AT_STARTUP) {
+			fletcher_4_impl_setid(id);
+			chksum_benchit(cs);
+		}
+	}
+	chksum_summary(&chksum_stat_data[cbid++], "fletcher4_byteswap",
+	    chksum_impl_fletcher_4_byteswap);
+	fletcher_4_impl_setid(id_save);
 
 	ASSERT3U(cbid, ==, chksum_stat_cnt);
 
