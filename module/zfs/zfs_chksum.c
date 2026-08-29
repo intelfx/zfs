@@ -49,8 +49,13 @@ static const char *const chksum_bs_name[] = {
 /* Block sizes below this index use a linear abd, the rest a scattered one */
 #define	CHKSUM_BS_LINEAR	7
 
-/* Block size the implementation selection is based on */
-#define	CHKSUM_BS_SELECT	5
+/*
+ * Block size the implementation selection is based on.  128k is the default
+ * recordsize and thus the largest buffer a checksum is normally computed over:
+ * zio_checksum_generate() runs over zio->io_size, which is the physical, i.e.
+ * post-compression, size of the block.
+ */
+#define	CHKSUM_BS_SELECT	4
 
 typedef enum {
 	CHKSUM_ROW_BENCH = 0,	/* timings of one algorithm+implementation */
@@ -109,45 +114,50 @@ static int chksum_stat_cnt = 0;
 static void chksum_benchmark(void);
 
 /*
- * fletcher4 is reported twice, as "fletcher4" for the native and
- * "fletcher4_byteswap" for the byteswapping direction, since ZFS picks an
- * implementation for each of them separately.
+ * Throughput in MiB/s per block size, one row per algorithm and
+ * implementation.  fletcher4 is reported twice, as "fletcher4" for the native
+ * and "fletcher4_byteswap" for the byteswapping direction, since ZFS picks an
+ * implementation for each of them separately.  Everything else is tracked per
+ * algorithm only - there is no per-block-size implementation choice, the
+ * 128k column decides for all of them.
+ *
+ * Every algorithm is followed by a "-fastest" row.  It carries no timings and
+ * instead names the implementation that a checksum computed right now would
+ * use - the benchmark winner, unless the algorithm's module parameter pins a
+ * specific implementation.
  *
  * The last two rows answer which "-o checksum=" is cheapest at a given block
  * size: "best-overall" over all algorithms, "best-dedup" over those usable as
  * a dedup checksum on their own.  Note that edonr is absent from the latter
  * because it is only accepted as "dedup=edonr,verify".
  *
- * Sample output on i3-1005G1 System, fletcher4 rows elided.  Every algorithm
- * is followed by a
- * "-fastest" row, which carries no timings and instead names the
- * implementation that a checksum computed right now would use - the benchmark
- * winner, unless the algorithm's module parameter pins a specific one.
+ * Sample output on an i3-1005G1 system, with the fletcher4 rows and most
+ * columns elided - "best-overall" too, since it depends on the former:
  *
- * implementation   1k      4k     16k     64k    128k    256k      1m     16m
- * edonr-generic  1278    1625    1769    1776    1783    1778    1771    1767
- * edonr-fastest         generic
- * skein-generic   548     594     613     623     621     623     621     486
- * skein-fastest         generic
- * sha256-generic  255     270     281     278     279     281     283     283
- * sha256-x64      288     310     316     317     318     317     317     316
- * sha256-ssse3    304     342     351     355     356     357     356     356
- * sha256-avx      311     348     359     362     362     363     363     362
- * sha256-avx2     330     378     389     395     395     395     395     395
- * sha256-shani    908    1127    1212    1230    1233    1234    1223    1230
- * sha256-fastest          shani
- * sha512-generic  359     409     431     427     429     430     428     423
- * sha512-x64      420     473     490     496     497     497     496     495
- * sha512-avx      406     522     546     560     560     560     556     560
- * sha512-avx2     464     568     601     606     609     610     607     608
- * sha512-fastest           avx2
- * blake3-generic  330     327     324     323     324     320     323     322
- * blake3-sse2     424    1366    1449    1468    1458    1453    1395    1408
- * blake3-sse41    453    1554    1658    1703    1689    1669    1622    1630
- * blake3-avx2     452    2013    3225    3351    3356    3261    3076    3101
- * blake3-avx512   498    2869    5269    5926    5872    5643    5014    5005
- * blake3-fastest         avx512
- * best-dedup             sha256  blake3  blake3  blake3  blake3  blake3  blake3
+ * implementation                            1k        4k      256k       16m
+ * edonr-generic                           1278      1625      1783      1767
+ * edonr-fastest                        generic
+ * skein-generic                            548       594       621       486
+ * skein-fastest                        generic
+ * sha256-generic                           255       270       279       283
+ * sha256-x64                               288       310       318       316
+ * sha256-ssse3                             304       342       356       356
+ * sha256-avx                               311       348       362       362
+ * sha256-avx2                              330       378       395       395
+ * sha256-shani                             908      1127      1233      1230
+ * sha256-fastest                         shani
+ * sha512-generic                           359       409       429       423
+ * sha512-x64                               420       473       497       495
+ * sha512-avx                               406       522       560       560
+ * sha512-avx2                              464       568       609       608
+ * sha512-fastest                          avx2
+ * blake3-generic                           330       327       324       322
+ * blake3-sse2                              424      1366      1458      1408
+ * blake3-sse41                             453      1554      1689      1630
+ * blake3-avx2                              452      2013      3356      3101
+ * blake3-avx512                            498      2869      5872      5005
+ * blake3-fastest                        avx512
+ * best-dedup                            sha256    blake3    blake3    blake3
  */
 static int
 chksum_kstat_headers(char *buf, size_t size)
