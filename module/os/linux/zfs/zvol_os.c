@@ -1241,23 +1241,29 @@ zvol_queue_limits_init(zvol_queue_limits_t *limits, zvol_state_t *zv,
 
 	/*
 	 * Topology values in order of decreasing size:
-	 * - io_opt: the largest I/O size that has benefits (hint)
-	 * - io_min: the smallest I/O size that does not incur penalties (hint)
-	 * - physical_block_size: the smallest I/O size that can be written
-	 *   atomically (hint, volblocksectorhint or volblocksize)
-	 * - logical_block_size: the addressable unit (volblocksectorsize).
-	 *   This is not a hint: it defines the mapping between LBAs and byte
-	 *   offsets, so changing it changes how the data is interpreted.
+	 * - io_opt (hint): the largest I/O size that has benefits
+	 * - io_min (hint): the smallest I/O size that does not incur penalties
+	 * - physical_block_size: the smallest I/O that can be written atomically
+	 *       NB: this is technically a hint, but semantically-significant
+	 *           (used to derive atomicity assumptions)
+	 * - logical_block_size: the addressable unit (LBA) size
+	 *       NB: this defines the mapping between LBAs and byte offsets,
+	 *           so changing it reinterprets the contents of the volume
+	 *           (i.e. NOT a hint)
 	 */
+
+	/* this is NOT a hint */
 	limits->zql_logical_block_size =
-	    zvol_logical_block_size(zv->zv_sectorsize);
-	if (limits->zql_logical_block_size == 0)
-		limits->zql_logical_block_size = SECTOR_SIZE;
-	limits->zql_physical_block_size = MAX(zv->zv_sectorhint != 0 ?
-	    zv->zv_sectorhint : zv->zv_volblocksize,
-	    limits->zql_logical_block_size);
-	limits->zql_io_min = MAX(zv->zv_volblocksize,
-	    limits->zql_physical_block_size);
+	    zvol_logical_block_size(zv->zv_sectorsize) ?: SECTOR_SIZE;
+
+	/* this is a semantically-significant hint */
+	/* TODO: clamp to volblocksize? values of pbs > volblocksize are
+	 * semantically invalid as these I/Os cannot be written atomically */
+	limits->zql_physical_block_size =
+	    zv->zv_sectorhint ?: zv->zv_volblocksize;
+
+	/* these two are hints */
+	limits->zql_io_min = zv->zv_volblocksize;
 	limits->zql_io_opt = DMU_MAX_ACCESS / 2;
 
 	limits->zql_max_discard_sectors =
