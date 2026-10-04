@@ -96,6 +96,46 @@ zvol_end_io(struct bio *bio, struct request *rq, int error)
 static unsigned int zvol_blk_mq_queue_depth = BLKDEV_DEFAULT_RQ;
 static unsigned int zvol_actual_blk_mq_queue_depth;
 
+/*
+ * Since 6.9, Linux has been removing queue limit setters in favour of an
+ * initial queue_limits struct applied when the device is open. Since 6.11,
+ * queue_limits is being extended to allow more things to be applied when the
+ * device is open. Setters are also being removed for this.
+ *
+ * For OpenZFS, this means that depending on kernel version, some options may
+ * be set up before the device is open, and some applied to an open device
+ * (queue) after the fact.
+ *
+ * We manage this complexity by having our own limits struct,
+ * zvol_queue_limits_t, in which we carry any queue config that we're
+ * interested in setting. This structure is the same on all kernels.
+ *
+ * These limits are then applied to the queue at device open time by the most
+ * appropriate method for the kernel.
+ *
+ * zvol_queue_limits_convert() is used on 6.9+ (where the two-arg form of
+ * blk_alloc_disk() exists). This converts our limits struct to a proper Linux
+ * struct queue_limits, and passes it in. Any fields added in later kernels are
+ * (obviously) not set up here.
+ *
+ * zvol_queue_limits_apply() is called on all kernel versions after the queue
+ * is created, and applies any remaining config. Before 6.9 that will be
+ * everything, via setter methods. After 6.9 that will be whatever couldn't be
+ * put into struct queue_limits. (This implies that zvol_queue_limits_apply()
+ * will always be a no-op on the latest kernel we support).
+ */
+typedef struct zvol_queue_limits {
+	unsigned int	zql_max_hw_sectors;
+	unsigned short	zql_max_segments;
+	unsigned int	zql_max_segment_size;
+	unsigned int	zql_io_min;
+	unsigned int	zql_io_opt;
+	unsigned int	zql_logical_block_size;
+	unsigned int	zql_physical_block_size;
+	unsigned int	zql_max_discard_sectors;
+	unsigned int	zql_discard_granularity;
+} zvol_queue_limits_t;
+
 struct zvol_state_os {
 	struct gendisk		*zvo_disk;	/* generic disk */
 	struct request_queue	*zvo_queue;	/* request queue */
@@ -105,6 +145,9 @@ struct zvol_state_os {
 
 	/* Set from the global 'zvol_use_blk_mq' at zvol load */
 	boolean_t use_blk_mq;
+
+	/* Limits last applied to zvo_queue */
+	zvol_queue_limits_t zvo_limits;
 };
 
 static struct ida zvol_ida;
@@ -1108,46 +1151,6 @@ static const struct block_device_operations zvol_ops = {
 #endif
 };
 
-/*
- * Since 6.9, Linux has been removing queue limit setters in favour of an
- * initial queue_limits struct applied when the device is open. Since 6.11,
- * queue_limits is being extended to allow more things to be applied when the
- * device is open. Setters are also being removed for this.
- *
- * For OpenZFS, this means that depending on kernel version, some options may
- * be set up before the device is open, and some applied to an open device
- * (queue) after the fact.
- *
- * We manage this complexity by having our own limits struct,
- * zvol_queue_limits_t, in which we carry any queue config that we're
- * interested in setting. This structure is the same on all kernels.
- *
- * These limits are then applied to the queue at device open time by the most
- * appropriate method for the kernel.
- *
- * zvol_queue_limits_convert() is used on 6.9+ (where the two-arg form of
- * blk_alloc_disk() exists). This converts our limits struct to a proper Linux
- * struct queue_limits, and passes it in. Any fields added in later kernels are
- * (obviously) not set up here.
- *
- * zvol_queue_limits_apply() is called on all kernel versions after the queue
- * is created, and applies any remaining config. Before 6.9 that will be
- * everything, via setter methods. After 6.9 that will be whatever couldn't be
- * put into struct queue_limits. (This implies that zvol_queue_limits_apply()
- * will always be a no-op on the latest kernel we support).
- */
-typedef struct zvol_queue_limits {
-	unsigned int	zql_max_hw_sectors;
-	unsigned short	zql_max_segments;
-	unsigned int	zql_max_segment_size;
-	unsigned int	zql_io_min;
-	unsigned int	zql_io_opt;
-	unsigned int	zql_logical_block_size;
-	unsigned int	zql_physical_block_size;
-	unsigned int	zql_max_discard_sectors;
-	unsigned int	zql_discard_granularity;
-} zvol_queue_limits_t;
-
 #ifdef BLK_MAX_BLOCK_SIZE
 #define	ZVOL_MAX_LOGICAL_BLOCK_SIZE	BLK_MAX_BLOCK_SIZE
 #else
@@ -1173,6 +1176,9 @@ static void
 zvol_queue_limits_init(zvol_queue_limits_t *limits, zvol_state_t *zv,
     boolean_t use_blk_mq)
 {
+	/* Zero the padding, limits are compared with memcmp() */
+	memset(limits, 0, sizeof (zvol_queue_limits_t));
+
 	limits->zql_max_hw_sectors = (DMU_MAX_ACCESS / 4) >> SECTOR_SHIFT;
 
 	if (use_blk_mq) {
@@ -1475,6 +1481,7 @@ zvol_alloc(dev_t dev, const char *name, uint64_t volsize, uint64_t volblocksize,
 
 	zvol_queue_limits_t limits;
 	zvol_queue_limits_init(&limits, zv, zv->zv_zso->use_blk_mq);
+	zso->zvo_limits = limits;
 
 	/*
 	 * The block layer has 3 interfaces for getting BIOs:
@@ -1920,7 +1927,6 @@ zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
     uint64_t sectorhint)
 {
 	struct zvol_state_os *zso = zv->zv_zso;
-	struct request_queue *q = zso->zvo_queue;
 	zvol_queue_limits_t limits;
 	boolean_t resize;
 	int error;
@@ -1934,16 +1940,21 @@ zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
 	zv->zv_sectorhint = sectorhint;
 	zvol_queue_limits_init(&limits, zv, zso->use_blk_mq);
 
-	resize = (limits.zql_logical_block_size != queue_logical_block_size(q));
-	if (!resize &&
-	    limits.zql_physical_block_size == queue_physical_block_size(q) &&
-	    limits.zql_io_min == queue_io_min(q))
+	/*
+	 * Compare with the limits that were requested rather than with those
+	 * in effect, which the kernel may have adjusted.
+	 */
+	if (memcmp(&limits, &zso->zvo_limits, sizeof (limits)) == 0)
 		return (0);
+
+	resize = (limits.zql_logical_block_size !=
+	    zso->zvo_limits.zql_logical_block_size);
 
 	if (resize && zv->zv_open_count > 0)
 		return (SET_ERROR(EBUSY));
 
 #ifdef HAVE_QUEUE_LIMITS_COMMIT_UPDATE_FROZEN
+	struct request_queue *q = zso->zvo_queue;
 	struct queue_limits qlimits;
 
 	/*
@@ -1970,6 +1981,9 @@ zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
 		if (zv->zv_flags & ZVOL_REMOVING)
 			cv_broadcast(&zv->zv_removing_cv);
 	}
+
+	if (error == 0)
+		zso->zvo_limits = limits;
 
 	/* Have the next open rescan partitions with the new addressing */
 	if (error == 0 && resize)
