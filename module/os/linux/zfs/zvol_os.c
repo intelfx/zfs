@@ -1160,6 +1160,7 @@ static const struct block_device_operations zvol_ops = {
 /*
  * The logical block size selected by the volblocksectorsize property, with
  * zero selecting 512-byte blocks.  Returns 0 if the kernel cannot support it.
+ * Equivalent to blk_validate_block_size(), on kernels that have it.
  */
 static unsigned int
 zvol_logical_block_size(uint64_t sectorsize)
