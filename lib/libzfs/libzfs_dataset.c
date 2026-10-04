@@ -1279,6 +1279,19 @@ zfs_valid_proplist(libzfs_handle_t *hdl, zfs_type_t type, nvlist_t *nvl,
 			break;
 		}
 
+		case ZFS_PROP_VOLBLKOPTIOSIZE:
+			/* Zero leaves it unset, UINT64_MAX is 'auto' */
+			if (intval != 0 && intval != UINT64_MAX &&
+			    (intval > (1ULL << 30) ||
+			    !IS_P2ALIGNED(intval, SPA_MINBLOCKSIZE))) {
+				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
+				    "'%s' must be 'auto', zero or a multiple "
+				    "of 512B up to 1G"), propname);
+				(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
+				goto error;
+			}
+			break;
+
 		case ZFS_PROP_SPECIAL_SMALL_BLOCKS:
 		{
 			int maxbs = SPA_MAXBLOCKSIZE;
@@ -2998,6 +3011,22 @@ zfs_prop_get(zfs_handle_t *zhp, zfs_prop_t prop, char *propbuf, size_t proplen,
 				(void) snprintf(propbuf, proplen, "%llu",
 				    (u_longlong_t)val);
 		}
+		zcp_check(zhp, prop, val, NULL);
+		break;
+
+	case ZFS_PROP_VOLBLKOPTIOSIZE:
+		if (get_numeric_property(zhp, prop, src, &source, &val) != 0)
+			return (-1);
+
+		if (val == UINT64_MAX) {
+			(void) strlcpy(propbuf, "auto", proplen);
+		} else if (literal) {
+			(void) snprintf(propbuf, proplen, "%llu",
+			    (u_longlong_t)val);
+		} else {
+			zfs_nicenum(val, propbuf, proplen);
+		}
+
 		zcp_check(zhp, prop, val, NULL);
 		break;
 

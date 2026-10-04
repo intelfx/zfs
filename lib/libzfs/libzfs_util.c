@@ -1887,6 +1887,10 @@ zprop_parse_value(libzfs_handle_t *hdl, nvpair_t *elem, int prop,
 				ASSERT(type & ZFS_TYPE_POOL);
 				*ivalp = UINT64_MAX;
 				break;
+			case ZFS_PROP_VOLBLKOPTIOSIZE:
+				ASSERT(type & ZFS_TYPE_DATASET);
+				*ivalp = UINT64_MAX;
+				break;
 			default:
 				zfs_error_aux(hdl, dgettext(TEXT_DOMAIN,
 				    "'auto' is invalid value for '%s'"),

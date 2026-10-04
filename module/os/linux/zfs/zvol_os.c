@@ -1264,7 +1264,9 @@ zvol_queue_limits_init(zvol_queue_limits_t *limits, zvol_state_t *zv,
 
 	/* these two are hints */
 	limits->zql_io_min = zv->zv_volblocksize;
-	limits->zql_io_opt = DMU_MAX_ACCESS / 2;
+	/* UINT64_MAX selects the default, zero leaves io_opt unset */
+	limits->zql_io_opt = zv->zv_optiosize == UINT64_MAX ?
+	    DMU_MAX_ACCESS / 2 : zv->zv_optiosize;
 
 	limits->zql_max_discard_sectors =
 	    (zvol_max_discard_blocks * zv->zv_volblocksize) >> SECTOR_SHIFT;
@@ -1442,7 +1444,7 @@ zvol_alloc(dev_t dev, const char *name, uint64_t volsize, uint64_t volblocksize,
 {
 	zvol_state_t *zv;
 	struct zvol_state_os *zso;
-	uint64_t volmode, sectorsize, sectorhint;
+	uint64_t volmode, sectorsize, sectorhint, optiosize;
 	int ret;
 
 	ret = dsl_prop_get_integer(name, "volmode", &volmode, NULL);
@@ -1456,6 +1458,11 @@ zvol_alloc(dev_t dev, const char *name, uint64_t volsize, uint64_t volblocksize,
 
 	ret = dsl_prop_get_integer(name,
 	    zfs_prop_to_name(ZFS_PROP_VOLBLKSECTORHINT), &sectorhint, NULL);
+	if (ret)
+		return (ret);
+
+	ret = dsl_prop_get_integer(name,
+	    zfs_prop_to_name(ZFS_PROP_VOLBLKOPTIOSIZE), &optiosize, NULL);
 	if (ret)
 		return (ret);
 
@@ -1479,6 +1486,7 @@ zvol_alloc(dev_t dev, const char *name, uint64_t volsize, uint64_t volblocksize,
 	zv->zv_volblocksize = volblocksize;
 	zv->zv_sectorsize = sectorsize;
 	zv->zv_sectorhint = sectorhint;
+	zv->zv_optiosize = optiosize;
 
 	list_link_init(&zv->zv_next);
 	mutex_init(&zv->zv_state_lock, NULL, MUTEX_DEFAULT, NULL);
@@ -1921,8 +1929,8 @@ zvol_os_set_capacity(zvol_state_t *zv, uint64_t capacity)
 }
 
 /*
- * Apply the volblocksectorsize and volblocksectorhint properties to the block
- * device.  The logical block size defines the addressing of the device, so it
+ * Apply the volblocksectorsize, volblocksectorhint and volblockoptiosize
+ * properties to the block device.  The logical block size defines the addressing of the device, so it
  * is only changed while the zvol is not open; EBUSY is returned otherwise.
  *
  * Changing the limits of a live queue requires queue_limits_*() functions,
@@ -1931,7 +1939,7 @@ zvol_os_set_capacity(zvol_state_t *zv, uint64_t capacity)
  */
 int
 zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
-    uint64_t sectorhint)
+    uint64_t sectorhint, uint64_t optiosize)
 {
 	struct zvol_state_os *zso = zv->zv_zso;
 	zvol_queue_limits_t limits;
@@ -1945,6 +1953,7 @@ zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
 
 	zv->zv_sectorsize = sectorsize;
 	zv->zv_sectorhint = sectorhint;
+	zv->zv_optiosize = optiosize;
 	zvol_queue_limits_init(&limits, zv, zso->use_blk_mq);
 
 	/*

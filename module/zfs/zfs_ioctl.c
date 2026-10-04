@@ -2715,6 +2715,7 @@ zfs_prop_set_special(const char *dsname, zprop_source_t source,
 	case ZFS_PROP_VOLMODE:
 	case ZFS_PROP_VOLBLKSECTORSIZE:
 	case ZFS_PROP_VOLBLKSECTORHINT:
+	case ZFS_PROP_VOLBLKOPTIOSIZE:
 		err = zvol_set_common(dsname, prop, source, intval);
 		break;
 	case ZFS_PROP_READONLY:
@@ -5120,6 +5121,14 @@ zfs_check_settable(const char *dsname, nvpair_t *pair, cred_t *cr)
 		if (nvpair_value_uint64(pair, &intval) == 0 && intval != 0 &&
 		    (intval < SPA_MINBLOCKSIZE ||
 		    intval > SPA_OLD_MAXBLOCKSIZE || !ISP2(intval)))
+			return (SET_ERROR(EINVAL));
+		break;
+
+	case ZFS_PROP_VOLBLKOPTIOSIZE:
+		/* Zero leaves the optimal I/O size unset, UINT64_MAX is auto */
+		if (nvpair_value_uint64(pair, &intval) == 0 && intval != 0 &&
+		    intval != UINT64_MAX && (intval > (1ULL << 30) ||
+		    !IS_P2ALIGNED(intval, SPA_MINBLOCKSIZE)))
 			return (SET_ERROR(EINVAL));
 		break;
 

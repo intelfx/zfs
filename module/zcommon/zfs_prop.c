@@ -746,6 +746,10 @@ zfs_prop_init(void)
 	zprop_register_number(ZFS_PROP_VOLBLKSECTORHINT, "volblocksectorhint",
 	    0, PROP_INHERIT, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME,
 	    "0 | 512 to 128k, power of 2", "VOLBLKSECHINT", B_FALSE, sfeatures);
+	zprop_register_number(ZFS_PROP_VOLBLKOPTIOSIZE, "volblockoptiosize",
+	    UINT64_MAX, PROP_INHERIT, ZFS_TYPE_FILESYSTEM | ZFS_TYPE_VOLUME,
+	    "auto | 0 | 512 to 1G, multiple of 512", "VOLBLKOPTIO", B_FALSE,
+	    sfeatures);
 
 	/* hidden properties */
 	zprop_register_hidden(ZFS_PROP_NUMCLONES, "numclones", PROP_TYPE_NUMBER,

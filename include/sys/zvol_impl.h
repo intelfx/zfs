@@ -62,6 +62,7 @@ typedef struct zvol_state {
 	boolean_t		zv_threading;	/* volthreading property */
 	uint64_t		zv_sectorsize;	/* volblocksectorsize property */
 	uint64_t		zv_sectorhint;	/* volblocksectorhint property */
+	uint64_t		zv_optiosize;	/* volblockoptiosize property */
 } zvol_state_t;
 
 /*
@@ -143,6 +144,6 @@ void zvol_os_remove_minor(zvol_state_t *zv);
 void zvol_os_set_disk_ro(zvol_state_t *zv, int flags);
 void zvol_os_set_capacity(zvol_state_t *zv, uint64_t capacity);
 int zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
-    uint64_t sectorhint);
+    uint64_t sectorhint, uint64_t optiosize);
 
 #endif

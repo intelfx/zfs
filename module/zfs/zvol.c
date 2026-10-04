@@ -1949,7 +1949,7 @@ zvol_set_volmode_impl(zvol_task_t *task)
 static int
 zvol_set_topology_minor(const char *name)
 {
-	uint64_t sectorsize, sectorhint;
+	uint64_t sectorsize, sectorhint, optiosize;
 	zvol_state_t *zv;
 	int error;
 
@@ -1963,6 +1963,11 @@ zvol_set_topology_minor(const char *name)
 	if (error != 0)
 		return (error);
 
+	error = dsl_prop_get_integer(name,
+	    zfs_prop_to_name(ZFS_PROP_VOLBLKOPTIOSIZE), &optiosize, NULL);
+	if (error != 0)
+		return (error);
+
 	zv = zvol_find_by_name(name, RW_NONE);
 	if (zv == NULL)
 		return (0);
@@ -1972,7 +1977,7 @@ zvol_set_topology_minor(const char *name)
 		return (0);
 	}
 
-	error = zvol_os_set_topology(zv, sectorsize, sectorhint);
+	error = zvol_os_set_topology(zv, sectorsize, sectorhint, optiosize);
 	if (error == EBUSY) {
 		/* Retried from zvol_last_close() */
 		zv->zv_flags |= ZVOL_TOPOLOGY_PENDING;
@@ -2140,6 +2145,7 @@ zvol_set_common_sync_cb(dsl_pool_t *dp, dsl_dataset_t *ds, void *arg)
 
 	case ZFS_PROP_VOLBLKSECTORSIZE:
 	case ZFS_PROP_VOLBLKSECTORHINT:
+	case ZFS_PROP_VOLBLKOPTIOSIZE:
 		task->zt_op = ZVOL_ASYNC_SET_TOPOLOGY;
 		break;
 

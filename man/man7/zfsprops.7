@@ -1994,6 +1994,20 @@ A sparse volume can become thick provisioned by setting
 .Sy refreservation
 to
 .Sy auto .
+.It Sy volblockoptiosize Ns = Ns Sy auto Ns | Ns Ar size
+For volumes, specifies the optimal I/O size reported by the block device.
+Any multiple of 512 bytes up to 1 GiB is valid.
+The value
+.Sy 0
+reports no optimal I/O size, and
+.Sy auto ,
+the default, reports the largest size a volume processes in a single operation.
+.Pp
+Consumers may use this value as a stripe width (for alignment and file system
+layout), to size read-ahead, and to size requests.
+Changes take effect immediately if the platform can update the block device
+in place, or otherwise once the volume is not open.
+This property is only supported on Linux.
 .It Sy volblocksectorhint Ns = Ns Ar size
 For volumes, specifies the physical block size reported by the block device,
 i.e. the smallest unit that consumers should write to avoid
