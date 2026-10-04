@@ -1955,10 +1955,11 @@ zvol_set_topology_minor(const char *name)
 
 	error = dsl_prop_get_integer(name,
 	    zfs_prop_to_name(ZFS_PROP_VOLBLKSECTORSIZE), &sectorsize, NULL);
-	if (error == 0)
-		error = dsl_prop_get_integer(name,
-		    zfs_prop_to_name(ZFS_PROP_VOLBLKSECTORHINT), &sectorhint,
-		    NULL);
+	if (error != 0)
+		return (error);
+
+	error = dsl_prop_get_integer(name,
+	    zfs_prop_to_name(ZFS_PROP_VOLBLKSECTORHINT), &sectorhint, NULL);
 	if (error != 0)
 		return (error);
 
