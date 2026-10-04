@@ -1260,10 +1260,9 @@ zvol_queue_limits_init(zvol_queue_limits_t *limits, zvol_state_t *zv,
 
 #ifdef HAVE_BLK_ALLOC_DISK_2ARG
 static void
-zvol_queue_limits_convert(zvol_queue_limits_t *limits,
+zvol_queue_limits_update(zvol_queue_limits_t *limits,
     struct queue_limits *qlimits)
 {
-	memset(qlimits, 0, sizeof (struct queue_limits));
 	qlimits->max_hw_sectors = limits->zql_max_hw_sectors;
 	qlimits->max_segments = limits->zql_max_segments;
 	qlimits->max_segment_size = limits->zql_max_segment_size;
@@ -1274,6 +1273,14 @@ zvol_queue_limits_convert(zvol_queue_limits_t *limits,
 	qlimits->max_discard_sectors = limits->zql_max_discard_sectors;
 	qlimits->max_hw_discard_sectors = limits->zql_max_discard_sectors;
 	qlimits->discard_granularity = limits->zql_discard_granularity;
+}
+
+static void
+zvol_queue_limits_convert(zvol_queue_limits_t *limits,
+    struct queue_limits *qlimits)
+{
+	memset(qlimits, 0, sizeof (struct queue_limits));
+	zvol_queue_limits_update(limits, qlimits);
 #ifdef HAVE_BLKDEV_QUEUE_LIMITS_FEATURES
 	qlimits->features =
 	    BLK_FEAT_WRITE_CACHE | BLK_FEAT_FUA | BLK_FEAT_IO_STAT;
@@ -1901,8 +1908,12 @@ zvol_os_set_capacity(zvol_state_t *zv, uint64_t capacity)
 
 /*
  * Apply the volblocksectorsize and volblocksectorhint properties to the block
- * device.  The block device has to be replaced for that, so EBUSY is returned
- * if the zvol is open, and ENOTSUP otherwise.
+ * device.  The logical block size defines the addressing of the device, so it
+ * is only changed while the zvol is not open; EBUSY is returned otherwise.
+ *
+ * Changing the limits of a live queue requires queue_limits_*() functions,
+ * which are not available to all modules.  Without them, ENOTSUP is returned
+ * to have the caller replace the block device.
  */
 int
 zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
@@ -1911,6 +1922,8 @@ zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
 	struct zvol_state_os *zso = zv->zv_zso;
 	struct request_queue *q = zso->zvo_queue;
 	zvol_queue_limits_t limits;
+	boolean_t resize;
+	int error;
 
 	ASSERT(MUTEX_HELD(&zv->zv_state_lock));
 
@@ -1921,15 +1934,54 @@ zvol_os_set_topology(zvol_state_t *zv, uint64_t sectorsize,
 	zv->zv_sectorhint = sectorhint;
 	zvol_queue_limits_init(&limits, zv, zso->use_blk_mq);
 
-	if (limits.zql_logical_block_size == queue_logical_block_size(q) &&
+	resize = (limits.zql_logical_block_size != queue_logical_block_size(q));
+	if (!resize &&
 	    limits.zql_physical_block_size == queue_physical_block_size(q) &&
 	    limits.zql_io_min == queue_io_min(q))
 		return (0);
 
-	if (zv->zv_open_count > 0)
+	if (resize && zv->zv_open_count > 0)
 		return (SET_ERROR(EBUSY));
 
-	return (SET_ERROR(ENOTSUP));
+#ifdef HAVE_QUEUE_LIMITS_COMMIT_UPDATE_FROZEN
+	struct queue_limits qlimits;
+
+	/*
+	 * Freezing the queue waits for in-flight I/O, which may itself be
+	 * waiting for zv_state_lock (via zv_suspend_lock).  If the zvol is
+	 * open, drop the lock and hold a suspend reference instead to keep
+	 * the zvol from being removed.  Otherwise there is no I/O to wait
+	 * for, and keeping the lock keeps the zvol from being opened while
+	 * its logical block size is changing.
+	 */
+	boolean_t unlock = (zv->zv_open_count > 0);
+	if (unlock) {
+		atomic_inc(&zv->zv_suspend_ref);
+		mutex_exit(&zv->zv_state_lock);
+	}
+
+	qlimits = queue_limits_start_update(q);
+	zvol_queue_limits_update(&limits, &qlimits);
+	error = -queue_limits_commit_update_frozen(q, &qlimits);
+
+	if (unlock) {
+		mutex_enter(&zv->zv_state_lock);
+		atomic_dec(&zv->zv_suspend_ref);
+		if (zv->zv_flags & ZVOL_REMOVING)
+			cv_broadcast(&zv->zv_removing_cv);
+	}
+
+	/* Have the next open rescan partitions with the new addressing */
+	if (error == 0 && resize)
+		zv->zv_changed = 1;
+#else
+	if (zv->zv_open_count > 0)
+		error = SET_ERROR(EBUSY);
+	else
+		error = SET_ERROR(ENOTSUP);
+#endif
+
+	return (error);
 }
 
 int

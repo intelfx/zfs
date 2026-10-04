@@ -294,6 +294,37 @@ AC_DEFUN([ZFS_AC_KERNEL_BLK_MQ_RQ_HCTX], [
 	])
 ])
 
+dnl #
+dnl # 6.14 API: queue_limits_commit_update_frozen() commits an update of the
+dnl # limits of a live queue.  It is exported GPL-only, so it is only usable
+dnl # if the license permits it.
+dnl #
+AC_DEFUN([ZFS_AC_KERNEL_SRC_QUEUE_LIMITS_COMMIT_UPDATE_FROZEN], [
+	ZFS_LINUX_TEST_SRC([queue_limits_commit_update_frozen], [
+		#include <linux/blkdev.h>
+	], [
+		struct request_queue *q = NULL;
+		struct queue_limits lim = {0};
+		int error __attribute__ ((unused)) =
+		    queue_limits_commit_update_frozen(q, &lim);
+	], [], [ZFS_META_LICENSE])
+])
+
+AC_DEFUN([ZFS_AC_KERNEL_QUEUE_LIMITS_COMMIT_UPDATE_FROZEN], [
+	AC_MSG_CHECKING([whether queue_limits_commit_update_frozen() is usable])
+	ZFS_LINUX_TEST_RESULT([queue_limits_commit_update_frozen_license], [
+		AC_MSG_RESULT(yes)
+		AC_DEFINE(HAVE_QUEUE_LIMITS_COMMIT_UPDATE_FROZEN, 1,
+		    [queue_limits_commit_update_frozen() is available])
+	], [
+		ZFS_LINUX_TEST_RESULT([queue_limits_commit_update_frozen], [
+			AC_MSG_RESULT([no, GPL-only])
+		], [
+			AC_MSG_RESULT(no)
+		])
+	])
+])
+
 AC_DEFUN([ZFS_AC_KERNEL_SRC_BLK_QUEUE], [
 	ZFS_AC_KERNEL_SRC_BLK_QUEUE_PLUG
 	ZFS_AC_KERNEL_SRC_BLK_QUEUE_BDI
@@ -305,6 +336,7 @@ AC_DEFUN([ZFS_AC_KERNEL_SRC_BLK_QUEUE], [
 	ZFS_AC_KERNEL_SRC_BLK_QUEUE_MAX_SEGMENTS
 	ZFS_AC_KERNEL_SRC_BLK_QUEUE_ROT
 	ZFS_AC_KERNEL_SRC_BLK_MQ_RQ_HCTX
+	ZFS_AC_KERNEL_SRC_QUEUE_LIMITS_COMMIT_UPDATE_FROZEN
 ])
 
 AC_DEFUN([ZFS_AC_KERNEL_BLK_QUEUE], [
@@ -318,4 +350,5 @@ AC_DEFUN([ZFS_AC_KERNEL_BLK_QUEUE], [
 	ZFS_AC_KERNEL_BLK_QUEUE_MAX_SEGMENTS
 	ZFS_AC_KERNEL_BLK_QUEUE_ROT
 	ZFS_AC_KERNEL_BLK_MQ_RQ_HCTX
+	ZFS_AC_KERNEL_QUEUE_LIMITS_COMMIT_UPDATE_FROZEN
 ])
